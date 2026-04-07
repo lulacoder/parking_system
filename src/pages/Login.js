@@ -31,6 +31,12 @@ function Login() {
         setErrorMsg("የተሳሳተ የይለፍ ቃል ተጠቅመዋል።");
       } else if (error.code === "auth/user-not-found") {
         setErrorMsg("በዚህ ኢሜይል የተመዘገበ አካውንት የለም።");
+      } else if (error.code === "auth/invalid-credential") {
+        setErrorMsg("የመግቢያ መረጃዎቹ ትክክል አይደሉም።");
+      } else if (error.code === "auth/too-many-requests") {
+        setErrorMsg("ብዙ ጊዜ ተሞክሯል። እባክዎ ትንሽ ቆይተው ድጋሚ ይሞክሩ።");
+      } else if (error.code === "auth/network-request-failed") {
+        setErrorMsg("ኔትዎርክ ችግር አለ። ኢንተርኔትዎን ያረጋግጡ።");
       } else {
         setErrorMsg("ለመግባት ሲሞከር ስህተት ተፈጥሯል፤ እባክዎ እንደገና ይሞክሩ።");
       }

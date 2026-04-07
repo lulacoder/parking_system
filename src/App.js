@@ -1,75 +1,96 @@
 import "bootstrap/dist/css/bootstrap.min.css";
-import React, { useState, useEffect } from "react";
-import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
-import { auth, database } from "./firebase";
+import React, { useEffect, useMemo, useState } from "react";
+import { BrowserRouter as Router, Navigate, Route, Routes } from "react-router-dom";
 
-// Components & Pages
+import { auth, firestore } from "./firebase";
 import Navbar from "./components/Navbar";
 import Login from "./pages/Login";
 import Signup from "./pages/signup";
-import UserView from "./pages/UserView";
-import AdminDashboard from "./pages/AdminDashboard";
-import OwnerDashboard from "./pages/OwnerDashboard";
-import OperatorDashboard from "./pages/OperatorDashboard";
+import DriverHome from "./pages/DriverHome";
+import AdminHome from "./pages/AdminHome";
+import OwnerHome from "./pages/OwnerHome";
+import OperatorHome from "./pages/OperatorHome";
+import { RedirectHome, RequireAuth, RequireRole } from "./app/RoleGuards";
+import { FALLBACK_ROLE, getRoleHome, sanitizeRole } from "./app/roleUtils";
 
 function App() {
   const [user, setUser] = useState(null);
-  const [userRole, setUserRole] = useState(null);
+  const [userRole, setUserRole] = useState(FALLBACK_ROLE);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const authInitTimeout = setTimeout(() => {
-      setLoading(false);
+    let mounted = true;
+    const timeoutRef = setTimeout(() => {
+      if (mounted) setLoading(false);
     }, 8000);
 
-    // ተጠቃሚው መግባትና መውጣቱን የሚከታተል (Listener)
-    const unsubscribe = auth.onAuthStateChanged(async (currentUser) => {
-      setLoading(true);
-      if (currentUser) {
-        // Do not block routing on profile fetch; default role to user first.
+    const unsubscribe = auth.onAuthStateChanged(
+      async (currentUser) => {
+        if (!mounted) return;
+        setLoading(true);
+
+        if (!currentUser) {
+          setUser(null);
+          setUserRole(FALLBACK_ROLE);
+          setLoading(false);
+          clearTimeout(timeoutRef);
+          return;
+        }
+
+        // Never block auth state by profile fetch.
         setUser(currentUser);
-        setUserRole("user");
+        setUserRole(FALLBACK_ROLE);
 
         try {
           const snapshot = await Promise.race([
-            database.ref(`Users/${currentUser.uid}`).once("value"),
-            new Promise((_, reject) => setTimeout(() => reject(new Error("Profile fetch timeout")), 5000)),
+            firestore.collection("users").doc(currentUser.uid).get(),
+            new Promise((_, reject) => setTimeout(() => reject(new Error("PROFILE_TIMEOUT")), 5000)),
           ]);
-          const userData = snapshot.val();
-          setUserRole(userData?.role || "user");
-        } catch (error) {
-          console.error("Failed to fetch user profile:", error);
-          // Keep authenticated user and fallback role.
-          setUserRole("user");
-        }
-      } else {
-        setUser(null);
-        setUserRole(null);
-      }
-      setLoading(false);
-      clearTimeout(authInitTimeout);
-    }, (error) => {
-      console.error("Auth listener failed:", error);
-      setUser(null);
-      setUserRole(null);
-      setLoading(false);
-      clearTimeout(authInitTimeout);
-    });
 
-    // Cleanup subscription
+          const profile = snapshot.exists ? snapshot.data() : null;
+          if (!profile) {
+            console.warn(`Profile missing for user ${currentUser.uid}; using fallback role.`);
+          } else if (profile.status && profile.status !== "active") {
+            console.warn(`User ${currentUser.uid} has status=${profile.status}; forcing sign-out.`);
+            await auth.signOut();
+            return;
+          } else {
+            setUserRole(sanitizeRole(profile.role));
+          }
+        } catch (error) {
+          console.error("Failed to resolve user profile from Firestore:", error);
+        } finally {
+          if (mounted) {
+            setLoading(false);
+            clearTimeout(timeoutRef);
+          }
+        }
+      },
+      (error) => {
+        console.error("Auth listener failed:", error);
+        if (!mounted) return;
+        setUser(null);
+        setUserRole(FALLBACK_ROLE);
+        setLoading(false);
+        clearTimeout(timeoutRef);
+      }
+    );
+
     return () => {
-      clearTimeout(authInitTimeout);
+      mounted = false;
+      clearTimeout(timeoutRef);
       unsubscribe();
     };
   }, []);
 
-  // 1. የጭነት ጊዜ (Loading Screen) - ነጭ ስክሪን እንዳይመጣ ይረዳል
+  const roleHome = useMemo(() => getRoleHome(userRole), [userRole]);
+
   if (loading) {
     return (
       <div className="d-flex flex-column justify-content-center align-items-center vh-100 bg-dark text-white">
-        <div className="spinner-border text-primary mb-3" role="status" style={{ width: '3rem', height: '3rem' }}></div>
-        <h3 className="fw-bold text-uppercase tracking-wider animate__animated animate__pulse animate__infinite">E N D E R A S E</h3>
-        <p className="text-secondary small mt-2">ስማርት የፓርኪንግ ሲስተም በመጫን ላይ...</p>
+        <div className="spinner-border text-primary mb-3" role="status" style={{ width: "3rem", height: "3rem" }}></div>
+        <h3 className="fw-bold text-uppercase">E N D E R A S E</h3>
+        <p className="text-secondary small mt-2">Loading authentication...</p>
       </div>
     );
   }
@@ -77,33 +98,37 @@ function App() {
   return (
     <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <div className="bg-dark min-vh-100 text-light overflow-hidden">
-        {/* ተጠቃሚው ከገባ ብቻ Navbar ይታያል */}
         {user && <Navbar userRole={userRole} userEmail={user?.email} />}
 
         <div className="container-fluid p-0">
           <Routes>
-            {/* ተጠቃሚው ካልገባ የትኛውም ገጽ ቢጻፍ ወደ Login ይሄዳል */}
-            {!user ? (
-              <>
-                <Route path="/login" element={<Login />} />
-                <Route path="/signup" element={<Signup />} />
-                <Route path="/" element={<Navigate to="/login" replace />} />
-                <Route path="*" element={<Navigate to="/login" replace />} />
-              </>
-            ) : (
-              <>
-                <Route path="/login" element={<Navigate to={`/${userRole || "user"}`} replace />} />
-                <Route path="/signup" element={<Navigate to={`/${userRole || "user"}`} replace />} />
+            <Route path="/login" element={user ? <Navigate to={roleHome} replace /> : <Login />} />
+            <Route path="/signup" element={user ? <Navigate to={roleHome} replace /> : <Signup />} />
 
-                <Route path="/admin" element={userRole === "admin" ? <AdminDashboard /> : <Navigate to={`/${userRole || "user"}`} replace />} />
-                <Route path="/owner" element={userRole === "owner" ? <OwnerDashboard /> : <Navigate to={`/${userRole || "user"}`} replace />} />
-                <Route path="/operator" element={userRole === "operator" ? <OperatorDashboard lotId="lot_01" /> : <Navigate to={`/${userRole || "user"}`} replace />} />
-                <Route path="/user" element={userRole === "user" ? <UserView /> : <Navigate to={`/${userRole || "user"}`} replace />} />
+            <Route element={<RequireAuth user={user} loading={loading} />}>
+              <Route element={<RequireRole user={user} role={userRole} allowedRoles={["driver"]} />}>
+                <Route path="/driver/home" element={<DriverHome />} />
+                <Route path="/driver/*" element={<Navigate to="/driver/home" replace />} />
+              </Route>
 
-                <Route path="/" element={<Navigate to={`/${userRole || "user"}`} replace />} />
-                <Route path="*" element={<Navigate to={`/${userRole || "user"}`} replace />} />
-              </>
-            )}
+              <Route element={<RequireRole user={user} role={userRole} allowedRoles={["operator"]} />}>
+                <Route path="/operator/home" element={<OperatorHome />} />
+                <Route path="/operator/*" element={<Navigate to="/operator/home" replace />} />
+              </Route>
+
+              <Route element={<RequireRole user={user} role={userRole} allowedRoles={["owner"]} />}>
+                <Route path="/owner/home" element={<OwnerHome />} />
+                <Route path="/owner/*" element={<Navigate to="/owner/home" replace />} />
+              </Route>
+
+              <Route element={<RequireRole user={user} role={userRole} allowedRoles={["admin"]} />}>
+                <Route path="/admin/home" element={<AdminHome />} />
+                <Route path="/admin/*" element={<Navigate to="/admin/home" replace />} />
+              </Route>
+            </Route>
+
+            <Route path="/" element={<RedirectHome user={user} role={userRole} loading={loading} />} />
+            <Route path="*" element={<RedirectHome user={user} role={userRole} loading={loading} />} />
           </Routes>
         </div>
       </div>

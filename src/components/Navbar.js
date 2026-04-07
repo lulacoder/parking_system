@@ -14,7 +14,9 @@ function Navbar({ userRole, userEmail }) {
     const roles = {
       admin: "ሲስተም አድሚን",
       owner: "የፓርኪንግ ባለቤት",
-      user: "አሽከርካሪ (Driver)"
+      operator: "ኦፕሬተር",
+      user: "አሽከርካሪ (Driver)",
+      driver: "አሽከርካሪ (Driver)"
     };
     return roles[role] || role;
   };

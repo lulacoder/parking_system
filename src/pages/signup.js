@@ -2,6 +2,8 @@ import React, { useState } from "react";
 import { auth, database } from "../firebase";
 import { useNavigate, Link } from "react-router-dom";
 
+const ALLOWED_SIGNUP_ROLES = ["user", "owner"];
+
 function Signup() {
   const [formData, setFormData] = useState({
     fullName: "",
@@ -29,6 +31,9 @@ function Signup() {
     if (password.length < 6) {
       return setError("የይለፍ ቃል ቢያንስ 6 ፊደላት መሆን አለበት!");
     }
+    if (!ALLOWED_SIGNUP_ROLES.includes(role)) {
+      return setError("ይህን የስራ ድርሻ መመዝገብ አይፈቀድም።");
+    }
 
     setLoading(true);
     setError("");
@@ -50,18 +55,25 @@ function Signup() {
       
       // 4. እንደ ስራ ድርሻቸው ወደ ሚመለከተው ገጽ መውሰድ
       if (role === "owner") navigate("/owner");
-      else if (role === "admin") navigate("/admin");
       else navigate("/user");
 
     } catch (err) {
       // ስህተቶችን ወደ አማርኛ መቀየር
       if (err.code === "auth/email-already-in-use") {
         setError("ይህ ኢሜይል ቀድሞ ተመዝግቧል።");
+      } else if (err.code === "auth/operation-not-allowed") {
+        setError("Email/Password signup በ Firebase Authentication ላይ አልተከፈተም።");
+      } else if (err.code === "auth/invalid-api-key") {
+        setError("የ Firebase API Key ልክ አይደለም። የ .env ቅንብርን ያረጋግጡ።");
+      } else if (err.code === "auth/app-not-authorized") {
+        setError("ይህ domain በ Firebase Authentication Authorized domains ውስጥ የለም።");
       } else {
         setError("ምዝገባ አልተሳካም፦ " + err.message);
       }
+      console.error("Signup failed:", err.code, err.message);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   return (
@@ -83,6 +95,7 @@ function Signup() {
               name="fullName"
               className="form-control bg-light border-0 py-2"
               placeholder="ዮሐንስ ካሳ"
+              autoComplete="name"
               required
               onChange={handleChange}
             />
@@ -95,6 +108,7 @@ function Signup() {
               name="email"
               className="form-control bg-light border-0 py-2"
               placeholder="example@mail.com"
+              autoComplete="email"
               required
               onChange={handleChange}
             />
@@ -102,10 +116,9 @@ function Signup() {
 
           <div className="mb-2">
             <label className="form-label small fw-bold">የስራ ድርሻ (Role)</label>
-            <select name="role" className="form-select bg-light border-0 py-2 fw-bold text-primary" onChange={handleChange}>
+            <select name="role" className="form-select bg-light border-0 py-2 fw-bold text-primary" onChange={handleChange} value={formData.role}>
               <option value="user">አሽከርካሪ (Driver)</option>
               <option value="owner">የፓርኪንግ ባለቤት (Owner)</option>
-              <option value="admin">System Admin</option>
             </select>
           </div>
 
@@ -117,6 +130,7 @@ function Signup() {
                 name="password"
                 className="form-control bg-light border-0 py-2"
                 placeholder="••••••"
+                autoComplete="new-password"
                 required
                 onChange={handleChange}
               />
@@ -128,15 +142,20 @@ function Signup() {
                 name="confirmPassword"
                 className="form-control bg-light border-0 py-2"
                 placeholder="••••••"
+                autoComplete="new-password"
                 required
                 onChange={handleChange}
               />
             </div>
           </div>
 
-          <button type="submit" className="btn btn-primary w-100 py-2 fw-bold shadow-sm" disabled={loading} style={{ borderRadius: "12px" }}>
-            {loading ? <span className="spinner-border spinner-border-sm me-2"></span> : null}
-            {loading ? "በመመዝገብ ላይ..." : "አካውንት ፍጠር"}
+          <button type="submit" className="btn btn-primary w-100 py-2 fw-bold shadow-sm d-flex align-items-center justify-content-center gap-2" disabled={loading} style={{ borderRadius: "12px" }}>
+            <span
+              className="spinner-border spinner-border-sm"
+              style={{ visibility: loading ? "visible" : "hidden" }}
+              aria-hidden={!loading}
+            ></span>
+            <span>{loading ? "በመመዝገብ ላይ..." : "አካውንት ፍጠር"}</span>
           </button>
         </form>
 

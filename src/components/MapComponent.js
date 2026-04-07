@@ -30,20 +30,28 @@ const mapOptions = {
 
 function MapComponent({ parkingLots, onBook }) {
   const [selectedLot, setSelectedLot] = useState(null);
-  const [map, setMap] = useState(null);
 
-  const { isLoaded } = useJsApiLoader({
+  const mapsApiKey = (process.env.REACT_APP_GOOGLE_MAPS_API_KEY || "").trim();
+  const { isLoaded, loadError } = useJsApiLoader({
     id: 'google-map-script',
-    googleMapsApiKey: "YOUR_GOOGLE_MAPS_API_KEY" // እዚህ ጋር ቁልፉን ማስገባት አትርሳ
+    googleMapsApiKey: mapsApiKey
   });
 
   const onLoad = useCallback(function callback(map) {
-    setMap(map);
+    void map;
   }, []);
 
   const onUnmount = useCallback(function callback(map) {
-    setMap(null);
+    void map;
   }, []);
+
+  if (!mapsApiKey) {
+    return <div className="alert alert-warning">REACT_APP_GOOGLE_MAPS_API_KEY is missing.</div>;
+  }
+
+  if (loadError) {
+    return <div className="alert alert-danger">Google Maps failed to load. Check API key setup and restrictions.</div>;
+  }
 
   return isLoaded ? (
     <div className="animate__animated animate__fadeIn">

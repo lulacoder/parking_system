@@ -14,11 +14,12 @@ const center = { lat: 9.0300, lng: 38.7400 };
 function UserMapSearch() {
   const [parkingLots, setParkingLots] = useState([]);
   const [selectedLot, setSelectedLot] = useState(null);
+  const [bookingInFlight, setBookingInFlight] = useState(false);
 
-  const { isLoaded } = useJsApiLoader({
+  const mapsApiKey = (process.env.REACT_APP_GOOGLE_MAPS_API_KEY || "").trim();
+  const { isLoaded, loadError } = useJsApiLoader({
     id: 'google-map-script',
-    // .env ፋይል ውስጥ ማስቀመጥህን አረጋግጥ
-    googleMapsApiKey: process.env.REACT_APP_GOOGLE_MAPS_API_KEY 
+    googleMapsApiKey: mapsApiKey 
   });
 
   useEffect(() => {
@@ -34,22 +35,41 @@ function UserMapSearch() {
     return () => lotsRef.off();
   }, []);
 
-  const handleBooking = (lot) => {
-    // የቦታ መቀነስ ሂደት (Firebase Update)
-    if (lot.availableSpots > 0) {
-      const confirmBooking = window.confirm(`${lot.name} ላይ ቦታ መያዝ ይፈልጋሉ? ክፍያ 50 ብር ነው።`);
-      
-      if (confirmBooking) {
-        // የዳታቤዝ ዝመና (Slot መቀነስ)
-        database.ref(`Parking_Lots/${lot.id}`).update({
-          availableSpots: lot.availableSpots - 1
-        }).then(() => {
-          alert(`ለ ${lot.name} ቦታ ተይዟል! በቴሌብር/ሲቢኢ ብር 50 ብር ይክፈሉ::`);
-          setSelectedLot(null);
-        });
-      }
-    } else {
+  const handleBooking = async (lot) => {
+    if (bookingInFlight) return;
+    if (!lot?.id) return alert("የፓርኪንግ መረጃ የተሟላ አይደለም።");
+
+    if ((lot.availableSpots || 0) <= 0) {
       alert("ይቅርታ፣ በዚህ ፓርኪንግ ላይ ክፍት ቦታ የለም።");
+      return;
+    }
+
+    const confirmBooking = window.confirm(`${lot.name} ላይ ቦታ መያዝ ይፈልጋሉ? ክፍያ 50 ብር ነው።`);
+    if (!confirmBooking) return;
+
+    setBookingInFlight(true);
+    try {
+      const tx = await database.ref(`Parking_Lots/${lot.id}/availableSpots`).transaction((currentValue) => {
+        if (currentValue === null || currentValue <= 0) return;
+        return currentValue - 1;
+      });
+
+      if (!tx.committed) {
+        alert("ይቅርታ፣ ቦታው ከእርስዎ በፊት ተይዟል።");
+        return;
+      }
+
+      await database.ref(`Parking_Lots/${lot.id}`).update({
+        updatedAt: Date.now(),
+      });
+
+      alert(`ለ ${lot.name} ቦታ ተይዟል! በቴሌብር/ሲቢኢ ብር 50 ብር ይክፈሉ::`);
+      setSelectedLot(null);
+    } catch (error) {
+      console.error("User map booking failed:", error);
+      alert("ቦታ ለመያዝ ሲሞከር ስህተት ተፈጥሯል። እባክዎ ድጋሚ ይሞክሩ።");
+    } finally {
+      setBookingInFlight(false);
     }
   };
 
@@ -60,7 +80,15 @@ function UserMapSearch() {
         <small className="text-secondary">በአቅራቢያህ ያሉትን የፓርኪንግ አማራጮች እዚህ ታገኛለህ</small>
       </div>
       
-      {isLoaded ? (
+      {!mapsApiKey ? (
+        <div className="alert alert-warning">
+          REACT_APP_GOOGLE_MAPS_API_KEY is missing. Add it to `.env` and restart the dev server.
+        </div>
+      ) : loadError ? (
+        <div className="alert alert-danger">
+          Google Maps failed to load. Verify Maps JavaScript API is enabled and the key/domain restrictions allow `localhost`.
+        </div>
+      ) : isLoaded ? (
         <div className="card border-0 bg-transparent mb-5">
           <GoogleMap 
             mapContainerStyle={containerStyle} 
@@ -94,9 +122,9 @@ function UserMapSearch() {
                   <button 
                     className="btn btn-primary btn-sm w-100 shadow-sm" 
                     onClick={() => handleBooking(selectedLot)}
-                    disabled={selectedLot.availableSpots === 0}
+                    disabled={selectedLot.availableSpots === 0 || bookingInFlight}
                   >
-                    ቦታ ያዝ (Book Now)
+                    {bookingInFlight ? "በመያዝ ላይ..." : "ቦታ ያዝ (Book Now)"}
                   </button>
                 </div>
               </InfoWindow>

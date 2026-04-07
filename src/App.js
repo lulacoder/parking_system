@@ -5,7 +5,8 @@ import { auth, database } from "./firebase";
 
 // Components & Pages
 import Navbar from "./components/Navbar";
-import Login from "./pages/Login"; // ወይም "./components/Auth" እንደ ፋይልህ ስም
+import Login from "./pages/Login";
+import Signup from "./pages/signup";
 import UserView from "./pages/UserView";
 import AdminDashboard from "./pages/AdminDashboard";
 import OwnerDashboard from "./pages/OwnerDashboard";
@@ -17,31 +18,49 @@ function App() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    const authInitTimeout = setTimeout(() => {
+      setLoading(false);
+    }, 8000);
+
     // ተጠቃሚው መግባትና መውጣቱን የሚከታተል (Listener)
     const unsubscribe = auth.onAuthStateChanged(async (currentUser) => {
       setLoading(true);
       if (currentUser) {
+        // Do not block routing on profile fetch; default role to user first.
+        setUser(currentUser);
+        setUserRole("user");
+
         try {
-          // የተጠቃሚውን Role ከFirebase Realtime Database ማምጣት
-          const snapshot = await database.ref(`Users/${currentUser.uid}`).once('value');
+          const snapshot = await Promise.race([
+            database.ref(`Users/${currentUser.uid}`).once("value"),
+            new Promise((_, reject) => setTimeout(() => reject(new Error("Profile fetch timeout")), 5000)),
+          ]);
           const userData = snapshot.val();
-          
-          setUser(currentUser);
-          // Role ከሌለው እንደ 'user' (አሽከርካሪ) ይቆጠራል
-          setUserRole(userData?.role || 'user'); 
+          setUserRole(userData?.role || "user");
         } catch (error) {
-          console.error("የተጠቃሚ መረጃ ማግኘት አልተቻለም:", error);
-          setUserRole('user');
+          console.error("Failed to fetch user profile:", error);
+          // Keep authenticated user and fallback role.
+          setUserRole("user");
         }
       } else {
         setUser(null);
         setUserRole(null);
       }
       setLoading(false);
+      clearTimeout(authInitTimeout);
+    }, (error) => {
+      console.error("Auth listener failed:", error);
+      setUser(null);
+      setUserRole(null);
+      setLoading(false);
+      clearTimeout(authInitTimeout);
     });
 
     // Cleanup subscription
-    return () => unsubscribe();
+    return () => {
+      clearTimeout(authInitTimeout);
+      unsubscribe();
+    };
   }, []);
 
   // 1. የጭነት ጊዜ (Loading Screen) - ነጭ ስክሪን እንዳይመጣ ይረዳል
@@ -56,7 +75,7 @@ function App() {
   }
 
   return (
-    <Router>
+    <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <div className="bg-dark min-vh-100 text-light overflow-hidden">
         {/* ተጠቃሚው ከገባ ብቻ Navbar ይታያል */}
         {user && <Navbar userRole={userRole} userEmail={user?.email} />}
@@ -65,20 +84,24 @@ function App() {
           <Routes>
             {/* ተጠቃሚው ካልገባ የትኛውም ገጽ ቢጻፍ ወደ Login ይሄዳል */}
             {!user ? (
-              <Route path="*" element={<Login />} />
+              <>
+                <Route path="/login" element={<Login />} />
+                <Route path="/signup" element={<Signup />} />
+                <Route path="/" element={<Navigate to="/login" replace />} />
+                <Route path="*" element={<Navigate to="/login" replace />} />
+              </>
             ) : (
               <>
-                {/* 2. እንደየድርሻው (Role) የሚታዩ ገጾች (Role-Based Routing) */}
-                <Route path="/admin" element={userRole === 'admin' ? <AdminDashboard /> : <Navigate to={`/${userRole}`} />} />
-                <Route path="/owner" element={userRole === 'owner' ? <OwnerDashboard /> : <Navigate to={`/${userRole}`} />} />
-                <Route path="/operator" element={userRole === 'operator' ? <OperatorDashboard lotId="lot_01" /> : <Navigate to={`/${userRole}`} />} />
-                <Route path="/user" element={userRole === 'user' ? <UserView /> : <Navigate to={`/${userRole}`} />} />
+                <Route path="/login" element={<Navigate to={`/${userRole || "user"}`} replace />} />
+                <Route path="/signup" element={<Navigate to={`/${userRole || "user"}`} replace />} />
 
-                {/* መነሻ ገጽ (/) ሲነካ ወደሚመለከተው ዳሽቦርድ ይመራዋል */}
-                <Route path="/" element={<Navigate to={`/${userRole}`} replace />} />
-                
-                {/* የሌለ መንገድ ከተጻፈ ወደ ዋናው ገጽ ይመለሳል */}
-                <Route path="*" element={<Navigate to={`/${userRole}`} replace />} />
+                <Route path="/admin" element={userRole === "admin" ? <AdminDashboard /> : <Navigate to={`/${userRole || "user"}`} replace />} />
+                <Route path="/owner" element={userRole === "owner" ? <OwnerDashboard /> : <Navigate to={`/${userRole || "user"}`} replace />} />
+                <Route path="/operator" element={userRole === "operator" ? <OperatorDashboard lotId="lot_01" /> : <Navigate to={`/${userRole || "user"}`} replace />} />
+                <Route path="/user" element={userRole === "user" ? <UserView /> : <Navigate to={`/${userRole || "user"}`} replace />} />
+
+                <Route path="/" element={<Navigate to={`/${userRole || "user"}`} replace />} />
+                <Route path="*" element={<Navigate to={`/${userRole || "user"}`} replace />} />
               </>
             )}
           </Routes>

@@ -8,6 +8,7 @@ function Login() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState(""); // ስህተቶችን ለተጠቃሚው ለማሳየት
+  const navigate = useNavigate();
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -15,21 +16,27 @@ function Login() {
     setErrorMsg(""); // የቀድሞ ስህተትን አጽዳ
 
     try {
-      await auth.signInWithEmailAndPassword(email, password);
+      await Promise.race([
+        auth.signInWithEmailAndPassword(email, password),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("LOGIN_TIMEOUT")), 10000)),
+      ]);
       // እዚህ ጋር Navigate ማድረግ አያስፈልግም፣ 
       // ምክንያቱም App.js ላይ ያለው onAuthStateChanged በራሱ ይቀይረዋል።       
     } catch (error) {
       console.error(error.code);
       // ስህተቶችን ወደ አማርኛ መቀየር
-      if (error.code === "auth/wrong-password") {
+      if (error.message === "LOGIN_TIMEOUT") {
+        setErrorMsg("መግቢያው ተዘግይቷል። ኔትዎርክን/ Firebase ቅንብርን ያረጋግጡ እና ድጋሚ ይሞክሩ።");
+      } else if (error.code === "auth/wrong-password") {
         setErrorMsg("የተሳሳተ የይለፍ ቃል ተጠቅመዋል።");
       } else if (error.code === "auth/user-not-found") {
         setErrorMsg("በዚህ ኢሜይል የተመዘገበ አካውንት የለም።");
       } else {
         setErrorMsg("ለመግባት ሲሞከር ስህተት ተፈጥሯል፤ እባክዎ እንደገና ይሞክሩ።");
       }
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   return (
@@ -58,6 +65,7 @@ function Login() {
               type="email"
               className="form-control form-control-lg border-0 bg-light"
               placeholder="example@mail.com"
+              autoComplete="email"
               required
               style={{ borderRadius: "12px", fontSize: "16px" }}
               onChange={(e) => setEmail(e.target.value)}
@@ -70,6 +78,7 @@ function Login() {
               type="password"
               className="form-control form-control-lg border-0 bg-light"
               placeholder="••••••••"
+              autoComplete="current-password"
               required
               style={{ borderRadius: "12px", fontSize: "16px" }}
               onChange={(e) => setPassword(e.target.value)}
@@ -78,14 +87,16 @@ function Login() {
 
           <button
             type="submit"
-            className="btn btn-primary btn-lg w-100 fw-bold shadow mb-3"
+            className="btn btn-primary btn-lg w-100 fw-bold shadow mb-3 d-flex align-items-center justify-content-center gap-2"
             disabled={loading}
             style={{ borderRadius: "12px", padding: "12px" }}
           >
-            {loading ? (
-              <span className="spinner-border spinner-border-sm me-2"></span>
-            ) : null}
-            {loading ? "በመግባት ላይ..." : "ግባ (Login)"}
+            <span
+              className="spinner-border spinner-border-sm"
+              style={{ visibility: loading ? "visible" : "hidden" }}
+              aria-hidden={!loading}
+            ></span>
+            <span>{loading ? "በመግባት ላይ..." : "ግባ (Login)"}</span>
           </button>
         </form>
 
@@ -93,9 +104,9 @@ function Login() {
           <p className="small text-muted mb-1">አካውንት የለዎትም?</p>
           <button 
             className="btn btn-link text-primary fw-bold text-decoration-none p-0" 
-            onClick={() => alert("አዲስ አካውንት ለመክፈት እባክዎ ሲስተም አድሚኑን በ +251... ያነጋግሩ!")}
+            onClick={() => navigate("/signup")}
           >
-            አድሚኑን ይጠይቁ
+            አዲስ አካውንት ፍጠር
           </button>
         </div>
       </div>

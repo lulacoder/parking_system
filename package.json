@@ -22,7 +22,12 @@
     "build": "react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject",
-    "migrate:parking-slots": "node scripts/migrateParkingSlotsToCanonical.js"
+    "migrate:parking-slots": "node scripts/migrateParkingSlotsToCanonical.js",
+    "firebase:emulators": "npx -y firebase-tools@latest emulators:start --project digital-parking-f9d2c --only functions",
+    "firebase:emulators:all": "npx -y firebase-tools@latest emulators:start --project digital-parking-f9d2c --only firestore,functions",
+    "deploy:firestore": "npx -y firebase-tools@latest deploy --project digital-parking-f9d2c --only firestore:rules,firestore:indexes",
+    "deploy:functions": "npx -y firebase-tools@latest deploy --project digital-parking-f9d2c --only functions",
+    "deploy:phase2": "npm run deploy:firestore && npm run deploy:functions"
   },
   "eslintConfig": {
     "extends": [

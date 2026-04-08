@@ -46,7 +46,9 @@ service cloud.firestore {
     }
 
     match /users/{uid} {
-      allow read: if isSelf(uid) || isAdmin();
+      allow read: if isSelf(uid)
+        || isAdmin()
+        || (isOwner() && resource.data.ownerId == ownerIdOfUser());
 
       allow create: if isSelf(uid)
         && request.resource.data.role == "driver"

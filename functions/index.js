@@ -73,6 +73,10 @@ async function assertOperatorAssigned(uid, parkingId) {
   }
 }
 
+function normalizeEmail(email) {
+  return String(email || "").trim().toLowerCase();
+}
+
 async function writeAuditLog(action, actorUid, parkingId, metadata = {}) {
   await db.collection("auditLogs").add({
     action,
@@ -504,4 +508,91 @@ exports.assignOperatorToParking = onCall(CALLABLE_OPTIONS, async (request) => {
 
   await writeAuditLog("ASSIGN_OPERATOR_TO_PARKING", actorUid, parkingId, { operatorUid, assign });
   return { operatorUid, parkingId, assign };
+});
+
+exports.ownerCreateOperator = onCall(CALLABLE_OPTIONS, async (request) => {
+  const actorUid = request.auth?.uid;
+  const ownerProfile = await requireRole(request, "owner");
+  const ownerId = String(ownerProfile.ownerId || "").trim();
+
+  if (!ownerId) throw new HttpsError("failed-precondition", "Owner profile is missing ownerId.");
+
+  const email = normalizeEmail(request.data?.email);
+  const fullName = String(request.data?.fullName || "").trim();
+  const password = String(request.data?.password || "").trim();
+  const phone = String(request.data?.phone || "").trim();
+  const assignedParkingIdsRaw = Array.isArray(request.data?.assignedParkingIds) ? request.data.assignedParkingIds : [];
+  const assignedParkingIds = [...new Set(assignedParkingIdsRaw.map((id) => String(id || "").trim()).filter(Boolean))];
+
+  if (!email || !fullName || !password) {
+    throw new HttpsError("invalid-argument", "email, fullName, and password are required.");
+  }
+  if (password.length < 6) {
+    throw new HttpsError("invalid-argument", "Password must be at least 6 characters.");
+  }
+  if (!assignedParkingIds.length) {
+    throw new HttpsError("invalid-argument", "At least one parking assignment is required.");
+  }
+
+  const parkingDocs = await Promise.all(assignedParkingIds.map((parkingId) => db.collection("parkings").doc(parkingId).get()));
+  for (const parkingSnap of parkingDocs) {
+    if (!parkingSnap.exists) {
+      throw new HttpsError("not-found", `Parking ${parkingSnap.id} does not exist.`);
+    }
+    if (String(parkingSnap.data()?.ownerId || "") !== ownerId) {
+      throw new HttpsError("permission-denied", `Parking ${parkingSnap.id} is not owned by this owner.`);
+    }
+  }
+
+  let targetAuthUser = null;
+  try {
+    targetAuthUser = await admin.auth().getUserByEmail(email);
+  } catch (error) {
+    if (error.code !== "auth/user-not-found") {
+      throw new HttpsError("internal", "Failed to lookup operator account.");
+    }
+  }
+
+  if (!targetAuthUser) {
+    targetAuthUser = await admin.auth().createUser({
+      email,
+      password,
+      displayName: fullName,
+    });
+  }
+
+  const operatorUid = targetAuthUser.uid;
+  const operatorRef = db.collection("users").doc(operatorUid);
+
+  await db.runTransaction(async (tx) => {
+    const operatorSnap = await tx.get(operatorRef);
+    const existing = operatorSnap.exists ? operatorSnap.data() : null;
+
+    if (existing?.role && existing.role !== "operator") {
+      throw new HttpsError("failed-precondition", "Existing user is not an operator.");
+    }
+    if (existing?.ownerId && existing.ownerId !== ownerId) {
+      throw new HttpsError("permission-denied", "Operator is already bound to a different owner.");
+    }
+
+    tx.set(
+      operatorRef,
+      {
+        fullName,
+        email,
+        phone,
+        role: "operator",
+        status: "active",
+        ownerId,
+        assignedParkingIds,
+        createdByOwnerUid: actorUid,
+        createdAt: existing?.createdAt || Date.now(),
+        updatedAt: Date.now(),
+      },
+      { merge: true }
+    );
+  });
+
+  await writeAuditLog("OWNER_CREATE_OPERATOR", actorUid, null, { operatorUid, ownerId, assignedParkingIds });
+  return { operatorUid, ownerId, assignedParkingIds, status: "active" };
 });

@@ -45,6 +45,13 @@ service cloud.firestore {
       return userDoc().data.ownerId;
     }
 
+    function parkingOwnedByCaller(parkingId) {
+      return isOwner()
+        && parkingId is string
+        && exists(/databases/$(database)/documents/parkings/$(parkingId))
+        && get(/databases/$(database)/documents/parkings/$(parkingId)).data.ownerId == ownerIdOfUser();
+    }
+
     match /users/{uid} {
       allow read: if isSelf(uid)
         || isAdmin()
@@ -75,7 +82,8 @@ service cloud.firestore {
       allow read: if isAdmin()
         || (isDriver() && resource.data.driverId == request.auth.uid)
         || isAssignedOperator(resource.data.parkingId)
-        || (isOwner() && resource.data.ownerId == userDoc().data.ownerId);
+        || (isOwner() && resource.data.ownerId == userDoc().data.ownerId)
+        || parkingOwnedByCaller(resource.data.parkingId);
       allow write: if false;
     }
 
@@ -83,6 +91,7 @@ service cloud.firestore {
       allow read: if isAdmin()
         || (isDriver() && resource.data.driverId == request.auth.uid)
         || (isOwner() && resource.data.ownerId == ownerIdOfUser())
+        || parkingOwnedByCaller(resource.data.parkingId)
         || isAssignedOperator(resource.data.parkingId);
       allow write: if false;
     }
@@ -90,6 +99,7 @@ service cloud.firestore {
     match /payments/{paymentId} {
       allow read: if isAdmin()
         || (isOwner() && resource.data.ownerId == ownerIdOfUser())
+        || parkingOwnedByCaller(resource.data.parkingId)
         || isAssignedOperator(resource.data.parkingId);
       allow write: if false;
     }

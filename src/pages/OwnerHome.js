@@ -17,6 +17,8 @@ function OwnerHome() {
   });
   const [createOperatorLoading, setCreateOperatorLoading] = useState(false);
   const [createOperatorMessage, setCreateOperatorMessage] = useState("");
+  const [operatorAssignmentsDraft, setOperatorAssignmentsDraft] = useState({});
+  const [operatorActionLoading, setOperatorActionLoading] = useState({});
 
   useEffect(() => {
     const uid = auth.currentUser?.uid;
@@ -60,46 +62,52 @@ function OwnerHome() {
   }, [ownerProfile]);
 
   useEffect(() => {
-    if (!parkings.length) {
+    setOperatorAssignmentsDraft((prev) => {
+      const next = { ...prev };
+      operators.forEach((operator) => {
+        if (!next[operator.id]) {
+          next[operator.id] = Array.isArray(operator.assignedParkingIds) ? operator.assignedParkingIds : [];
+        }
+      });
+      Object.keys(next).forEach((operatorId) => {
+        if (!operators.some((op) => op.id === operatorId)) {
+          delete next[operatorId];
+        }
+      });
+      return next;
+    });
+  }, [operators]);
+
+  useEffect(() => {
+    if (!ownerProfile?.ownerId) {
       setCompletedSessions([]);
       setPayments([]);
       return undefined;
     }
-    let mounted = true;
-    const sessionUnsubs = parkings.map((p) =>
-      firestore
-        .collection("sessions")
-        .where("parkingId", "==", p.id)
-        .where("status", "==", "completed")
-        .onSnapshot((snap) => {
-          if (!mounted) return;
-          const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-          setCompletedSessions((prev) => {
-            const rest = prev.filter((x) => x.parkingId !== p.id);
-            return [...rest, ...rows];
-          });
-        })
-    );
-    const paymentUnsubs = parkings.map((p) =>
-      firestore
-        .collection("payments")
-        .where("parkingId", "==", p.id)
-        .where("status", "==", "confirmed")
-        .onSnapshot((snap) => {
-          if (!mounted) return;
-          const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-          setPayments((prev) => {
-            const rest = prev.filter((x) => x.parkingId !== p.id);
-            return [...rest, ...rows];
-          });
-        })
-    );
+
+    const sessionsUnsub = firestore
+      .collection("sessions")
+      .where("ownerId", "==", ownerProfile.ownerId)
+      .where("status", "==", "completed")
+      .onSnapshot(
+        (snap) => setCompletedSessions(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+        (err) => setError(err.message)
+      );
+
+    const paymentsUnsub = firestore
+      .collection("payments")
+      .where("ownerId", "==", ownerProfile.ownerId)
+      .where("status", "==", "confirmed")
+      .onSnapshot(
+        (snap) => setPayments(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+        (err) => setError(err.message)
+      );
+
     return () => {
-      mounted = false;
-      sessionUnsubs.forEach((fn) => fn());
-      paymentUnsubs.forEach((fn) => fn());
+      sessionsUnsub();
+      paymentsUnsub();
     };
-  }, [parkings]);
+  }, [ownerProfile]);
 
   const summary = useMemo(() => {
     const totalCapacity = parkings.reduce((acc, p) => acc + Number(p.slotCapacity || 0), 0);
@@ -183,6 +191,60 @@ function OwnerHome() {
       setError(message);
     } finally {
       setCreateOperatorLoading(false);
+    }
+  };
+
+  const setOperatorLoading = (operatorUid, action, value) => {
+    const key = `${operatorUid}:${action}`;
+    setOperatorActionLoading((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const isOperatorLoading = (operatorUid, action) => {
+    const key = `${operatorUid}:${action}`;
+    return Boolean(operatorActionLoading[key]);
+  };
+
+  const toggleOperatorParkingDraft = (operatorUid, parkingId) => {
+    setOperatorAssignmentsDraft((prev) => {
+      const current = prev[operatorUid] || [];
+      const hasParking = current.includes(parkingId);
+      return {
+        ...prev,
+        [operatorUid]: hasParking ? current.filter((id) => id !== parkingId) : [...current, parkingId],
+      };
+    });
+  };
+
+  const handleSaveOperatorAssignments = async (operatorUid) => {
+    const assignedParkingIds = operatorAssignmentsDraft[operatorUid] || [];
+    setError("");
+    setCreateOperatorMessage("");
+    setOperatorLoading(operatorUid, "assignments", true);
+
+    try {
+      const callable = functionsClient.httpsCallable("ownerUpdateOperatorAssignments");
+      await callable({ operatorUid, assignedParkingIds });
+      setCreateOperatorMessage("Operator assignments updated successfully.");
+    } catch (err) {
+      setError(err?.message || "Failed to update operator assignments.");
+    } finally {
+      setOperatorLoading(operatorUid, "assignments", false);
+    }
+  };
+
+  const handleToggleOperatorStatus = async (operatorUid, nextStatus) => {
+    setError("");
+    setCreateOperatorMessage("");
+    setOperatorLoading(operatorUid, "status", true);
+
+    try {
+      const callable = functionsClient.httpsCallable("ownerSetOperatorStatus");
+      await callable({ operatorUid, status: nextStatus });
+      setCreateOperatorMessage(`Operator set to ${nextStatus}.`);
+    } catch (err) {
+      setError(err?.message || "Failed to update operator status.");
+    } finally {
+      setOperatorLoading(operatorUid, "status", false);
     }
   };
 
@@ -326,7 +388,45 @@ function OwnerHome() {
                     <div key={op.id} className="list-group-item">
                       <div className="fw-bold">{op.fullName || op.email}</div>
                       <div className="small text-muted">{op.email}</div>
-                      <div className="small">Assigned: {(op.assignedParkingIds || []).join(", ") || "None"}</div>
+                      <div className="small mb-2">
+                        Status: <span className={op.status === "active" ? "text-success fw-semibold" : "text-danger fw-semibold"}>{op.status || "unknown"}</span>
+                      </div>
+                      <div className="small mb-2">Assigned: {(op.assignedParkingIds || []).join(", ") || "None"}</div>
+                      <div className="d-flex flex-wrap gap-2 mb-2">
+                        {parkings.map((parking) => (
+                          <label key={`${op.id}:${parking.id}`} className="form-check form-check-inline border rounded px-2 py-1">
+                            <input
+                              type="checkbox"
+                              className="form-check-input me-1"
+                              checked={(operatorAssignmentsDraft[op.id] || []).includes(parking.id)}
+                              onChange={() => toggleOperatorParkingDraft(op.id, parking.id)}
+                            />
+                            <span className="form-check-label">{parking.name}</span>
+                          </label>
+                        ))}
+                      </div>
+                      <div className="d-flex gap-2">
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-outline-primary"
+                          disabled={isOperatorLoading(op.id, "assignments")}
+                          onClick={() => handleSaveOperatorAssignments(op.id)}
+                        >
+                          {isOperatorLoading(op.id, "assignments") ? "Saving..." : "Save Assignments"}
+                        </button>
+                        <button
+                          type="button"
+                          className={`btn btn-sm ${op.status === "active" ? "btn-outline-danger" : "btn-outline-success"}`}
+                          disabled={isOperatorLoading(op.id, "status")}
+                          onClick={() => handleToggleOperatorStatus(op.id, op.status === "active" ? "inactive" : "active")}
+                        >
+                          {isOperatorLoading(op.id, "status")
+                            ? "Updating..."
+                            : op.status === "active"
+                            ? "Deactivate"
+                            : "Activate"}
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>

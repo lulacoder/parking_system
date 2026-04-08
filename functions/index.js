@@ -77,6 +77,16 @@ function normalizeEmail(email) {
   return String(email || "").trim().toLowerCase();
 }
 
+async function assertOwnerControlsParking(ownerId, parkingId) {
+  const parkingSnap = await db.collection("parkings").doc(parkingId).get();
+  if (!parkingSnap.exists) {
+    throw new HttpsError("not-found", `Parking ${parkingId} does not exist.`);
+  }
+  if (String(parkingSnap.data()?.ownerId || "") !== ownerId) {
+    throw new HttpsError("permission-denied", `Parking ${parkingId} is not owned by this owner.`);
+  }
+}
+
 async function writeAuditLog(action, actorUid, parkingId, metadata = {}) {
   await db.collection("auditLogs").add({
     action,
@@ -534,14 +544,8 @@ exports.ownerCreateOperator = onCall(CALLABLE_OPTIONS, async (request) => {
     throw new HttpsError("invalid-argument", "At least one parking assignment is required.");
   }
 
-  const parkingDocs = await Promise.all(assignedParkingIds.map((parkingId) => db.collection("parkings").doc(parkingId).get()));
-  for (const parkingSnap of parkingDocs) {
-    if (!parkingSnap.exists) {
-      throw new HttpsError("not-found", `Parking ${parkingSnap.id} does not exist.`);
-    }
-    if (String(parkingSnap.data()?.ownerId || "") !== ownerId) {
-      throw new HttpsError("permission-denied", `Parking ${parkingSnap.id} is not owned by this owner.`);
-    }
+  for (const parkingId of assignedParkingIds) {
+    await assertOwnerControlsParking(ownerId, parkingId);
   }
 
   let targetAuthUser = null;
@@ -595,4 +599,76 @@ exports.ownerCreateOperator = onCall(CALLABLE_OPTIONS, async (request) => {
 
   await writeAuditLog("OWNER_CREATE_OPERATOR", actorUid, null, { operatorUid, ownerId, assignedParkingIds });
   return { operatorUid, ownerId, assignedParkingIds, status: "active" };
+});
+
+exports.ownerUpdateOperatorAssignments = onCall(CALLABLE_OPTIONS, async (request) => {
+  const actorUid = request.auth?.uid;
+  const ownerProfile = await requireRole(request, "owner");
+  const ownerId = String(ownerProfile.ownerId || "").trim();
+  if (!ownerId) throw new HttpsError("failed-precondition", "Owner profile is missing ownerId.");
+
+  const operatorUid = String(request.data?.operatorUid || "").trim();
+  const assignedParkingIdsRaw = Array.isArray(request.data?.assignedParkingIds) ? request.data.assignedParkingIds : [];
+  const assignedParkingIds = [...new Set(assignedParkingIdsRaw.map((id) => String(id || "").trim()).filter(Boolean))];
+
+  if (!operatorUid) throw new HttpsError("invalid-argument", "operatorUid is required.");
+  if (!assignedParkingIds.length) {
+    throw new HttpsError("invalid-argument", "At least one parking assignment is required.");
+  }
+
+  for (const parkingId of assignedParkingIds) {
+    await assertOwnerControlsParking(ownerId, parkingId);
+  }
+
+  const operatorRef = db.collection("users").doc(operatorUid);
+  await db.runTransaction(async (tx) => {
+    const operatorSnap = await tx.get(operatorRef);
+    if (!operatorSnap.exists) throw new HttpsError("not-found", "Operator user not found.");
+    const operator = operatorSnap.data();
+    if (operator.role !== "operator") throw new HttpsError("failed-precondition", "Target user is not an operator.");
+    if (String(operator.ownerId || "") !== ownerId) {
+      throw new HttpsError("permission-denied", "This operator does not belong to this owner.");
+    }
+
+    tx.update(operatorRef, {
+      assignedParkingIds,
+      updatedAt: Date.now(),
+    });
+  });
+
+  await writeAuditLog("OWNER_UPDATE_OPERATOR_ASSIGNMENTS", actorUid, null, { operatorUid, ownerId, assignedParkingIds });
+  return { operatorUid, assignedParkingIds };
+});
+
+exports.ownerSetOperatorStatus = onCall(CALLABLE_OPTIONS, async (request) => {
+  const actorUid = request.auth?.uid;
+  const ownerProfile = await requireRole(request, "owner");
+  const ownerId = String(ownerProfile.ownerId || "").trim();
+  if (!ownerId) throw new HttpsError("failed-precondition", "Owner profile is missing ownerId.");
+
+  const operatorUid = String(request.data?.operatorUid || "").trim();
+  const status = String(request.data?.status || "").trim().toLowerCase();
+  if (!operatorUid) throw new HttpsError("invalid-argument", "operatorUid is required.");
+  if (!["active", "inactive"].includes(status)) {
+    throw new HttpsError("invalid-argument", "status must be active or inactive.");
+  }
+
+  const operatorRef = db.collection("users").doc(operatorUid);
+  await db.runTransaction(async (tx) => {
+    const operatorSnap = await tx.get(operatorRef);
+    if (!operatorSnap.exists) throw new HttpsError("not-found", "Operator user not found.");
+    const operator = operatorSnap.data();
+    if (operator.role !== "operator") throw new HttpsError("failed-precondition", "Target user is not an operator.");
+    if (String(operator.ownerId || "") !== ownerId) {
+      throw new HttpsError("permission-denied", "This operator does not belong to this owner.");
+    }
+
+    tx.update(operatorRef, {
+      status,
+      updatedAt: Date.now(),
+    });
+  });
+
+  await writeAuditLog("OWNER_SET_OPERATOR_STATUS", actorUid, null, { operatorUid, ownerId, status });
+  return { operatorUid, status };
 });

@@ -9,7 +9,9 @@ export const ROLE_HOME = {
 };
 
 export function sanitizeRole(inputRole) {
-  return ALLOWED_ROLES.includes(inputRole) ? inputRole : FALLBACK_ROLE;
+  if (typeof inputRole !== "string") return FALLBACK_ROLE;
+  const normalizedRole = inputRole.trim().toLowerCase();
+  return ALLOWED_ROLES.includes(normalizedRole) ? normalizedRole : FALLBACK_ROLE;
 }
 
 export function getRoleHome(role) {

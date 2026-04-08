@@ -41,6 +41,10 @@ service cloud.firestore {
       return isOperator() && assignedParkingIds() is list && parkingId in assignedParkingIds();
     }
 
+    function ownerIdOfUser() {
+      return userDoc().data.ownerId;
+    }
+
     match /users/{uid} {
       allow read: if isSelf(uid) || isAdmin();
 
@@ -76,17 +80,20 @@ service cloud.firestore {
     match /sessions/{sessionId} {
       allow read: if isAdmin()
         || (isDriver() && resource.data.driverId == request.auth.uid)
+        || (isOwner() && resource.data.ownerId == ownerIdOfUser())
         || isAssignedOperator(resource.data.parkingId);
       allow write: if false;
     }
 
     match /payments/{paymentId} {
-      allow read: if isAdmin() || isOwner() || isAssignedOperator(resource.data.parkingId);
+      allow read: if isAdmin()
+        || (isOwner() && resource.data.ownerId == ownerIdOfUser())
+        || isAssignedOperator(resource.data.parkingId);
       allow write: if false;
     }
 
     match /dailyReports/{reportId} {
-      allow read: if isAdmin() || isOwner();
+      allow read: if isAdmin() || (isOwner() && resource.data.ownerId == ownerIdOfUser());
       allow write: if false;
     }
 
@@ -96,7 +103,7 @@ service cloud.firestore {
     }
 
     match /owners/{doc=**} {
-      allow read: if isAdmin() || isOwner();
+      allow read: if isAdmin() || (isOwner() && doc == ownerIdOfUser());
       allow write: if false;
     }
   }

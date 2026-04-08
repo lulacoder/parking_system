@@ -47,7 +47,20 @@ function App() {
             new Promise((_, reject) => setTimeout(() => reject(new Error("PROFILE_TIMEOUT")), 5000)),
           ]);
 
-          const profile = snapshot.exists ? snapshot.data() : null;
+          const hasProfile =
+            typeof snapshot?.exists === "function" ? snapshot.exists() : Boolean(snapshot?.exists);
+          let profile = hasProfile ? snapshot.data() : null;
+
+          // Legacy compatibility: some older environments seeded "Users" (capital U).
+          if (!profile) {
+            const legacySnapshot = await firestore.collection("Users").doc(currentUser.uid).get();
+            const hasLegacyProfile =
+              typeof legacySnapshot?.exists === "function"
+                ? legacySnapshot.exists()
+                : Boolean(legacySnapshot?.exists);
+            profile = hasLegacyProfile ? legacySnapshot.data() : null;
+          }
+
           if (!profile) {
             console.warn(`Profile missing for user ${currentUser.uid}; using fallback role.`);
           } else if (profile.status && profile.status !== "active") {

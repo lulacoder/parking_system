@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 import { auth, firestore, functionsClient } from "../firebase";
 
 function OperatorHome() {
@@ -13,8 +14,6 @@ function OperatorHome() {
   const [qrLoading, setQrLoading] = useState(false);
   const [qrRefreshNonce, setQrRefreshNonce] = useState(0);
   const [loadingAction, setLoadingAction] = useState("");
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
 
   useEffect(() => {
     const uid = auth.currentUser?.uid;
@@ -26,10 +25,10 @@ function OperatorHome() {
         setAssignedParkingIds(assigned);
         if (!selectedParkingId && assigned.length) setSelectedParkingId(assigned[0]);
       },
-      (err) => setError(err.message)
+      (err) => toast.error(err.message || "Failed to load operator profile.")
     );
     return () => unsub();
-  }, [selectedParkingId, qrRefreshNonce]);
+  }, [selectedParkingId]);
 
   useEffect(() => {
     if (!selectedParkingId) {
@@ -46,7 +45,7 @@ function OperatorHome() {
           list.sort((a, b) => getMs(b.createdAt) - getMs(a.createdAt));
           setPendingRequests(list);
         },
-        (err) => setError(err.message)
+        (err) => toast.error(err.message || "Failed to load pending QR requests.")
       );
     return () => unsub();
   }, [selectedParkingId]);
@@ -68,7 +67,7 @@ function OperatorHome() {
             return [...filtered, { id: docSnap.id, ...docSnap.data() }].sort((a, b) => a.name.localeCompare(b.name));
           });
         },
-        (err) => setError(err.message)
+        (err) => toast.error(err.message || "Failed to load assigned parking.")
       )
     );
     return () => {
@@ -91,7 +90,7 @@ function OperatorHome() {
         (snapshot) => {
           setActiveSessions(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
         },
-        (err) => setError(err.message)
+        (err) => toast.error(err.message || "Failed to load active sessions.")
       );
     return () => unsub();
   }, [selectedParkingId]);
@@ -118,7 +117,7 @@ function OperatorHome() {
         setQrPayload(response.data);
       } catch (err) {
         if (!active) return;
-        setError(err.message || "Failed to create QR token.");
+        toast.error(err.message || "Failed to create QR token.");
       } finally {
         if (active) setQrLoading(false);
       }
@@ -130,19 +129,17 @@ function OperatorHome() {
       active = false;
       if (timer) clearInterval(timer);
     };
-  }, [selectedParkingId]);
+  }, [selectedParkingId, qrRefreshNonce]);
 
   const callAction = async (name, payload) => {
     setLoadingAction(name);
-    setError("");
-    setMessage("");
     try {
       const callable = functionsClient.httpsCallable(name);
       const response = await callable(payload);
-      setMessage(`${name} success.`);
+      toast.success(`${name} success.`);
       return response.data;
     } catch (err) {
-      setError(err.message || `${name} failed`);
+      toast.error(err.message || `${name} failed`);
       return null;
     } finally {
       setLoadingAction("");
@@ -158,14 +155,14 @@ function OperatorHome() {
     e.preventDefault();
     const result = await callAction("checkOutVehicle", { parkingId: selectedParkingId, plateNumber });
     if (result?.feeAmount != null) {
-      setMessage(`checkOutVehicle success. Fee: ${result.feeAmount} ETB`);
+      toast.success(`Checkout success. Fee: ${result.feeAmount} ETB`);
     }
   };
 
   const onApproveRequest = async (requestId) => {
     const result = await callAction("approveCheckInRequest", { requestId });
     if (result?.sessionId) {
-      setMessage(`Request approved. Session ${result.sessionId} started.`);
+      toast.success(`Request approved. Session ${result.sessionId} started.`);
     }
   };
 
@@ -186,9 +183,6 @@ function OperatorHome() {
           <p className="text-muted mb-0">Run secure check-in and check-out workflows via Cloud Functions.</p>
         </div>
       </div>
-
-      {error && <div className="alert alert-danger">{error}</div>}
-      {message && <div className="alert alert-success">{message}</div>}
 
       <div className="row g-4">
         <div className="col-12">

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { toast } from "sonner";
 import { firestore, functionsClient } from "../firebase";
 
 function DriverCheckInConfirm() {
@@ -12,8 +13,6 @@ function DriverCheckInConfirm() {
   const [requestStatus, setRequestStatus] = useState("");
   const [requestPayload, setRequestPayload] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
 
   useEffect(() => {
     if (!requestId) return undefined;
@@ -24,18 +23,16 @@ function DriverCheckInConfirm() {
         setRequestPayload(payload);
         setRequestStatus(payload.status || "");
       },
-      (err) => setError(err.message)
+      (err) => toast.error(err.message || "Failed to read check-in request status.")
     );
     return () => unsub();
   }, [requestId]);
 
   const confirmCheckIn = async (event) => {
     event.preventDefault();
-    setError("");
-    setMessage("");
 
     if (!token) {
-      setError("Invalid QR link. Ask operator to refresh QR and scan again.");
+      toast.error("Invalid QR link. Ask operator to refresh QR and scan again.");
       return;
     }
 
@@ -45,9 +42,9 @@ function DriverCheckInConfirm() {
       const response = await callable({ token, plateNumber });
       setRequestId(response.data.requestId);
       setRequestStatus(response.data.status);
-      setMessage("Confirmation sent. Please wait for operator approval.");
+      toast.success("Confirmation sent. Please wait for operator approval.");
     } catch (err) {
-      setError(err.message || "Failed to confirm check-in.");
+      toast.error(err.message || "Failed to confirm check-in.");
     } finally {
       setLoading(false);
     }
@@ -85,8 +82,6 @@ function DriverCheckInConfirm() {
           <p className="text-muted mb-4">Scan operator QR, confirm your plate, then wait for operator approval.</p>
 
           {!token && <div className="alert alert-danger">Missing QR token. Please scan again.</div>}
-          {error && <div className="alert alert-danger">{error}</div>}
-          {message && <div className="alert alert-success">{message}</div>}
 
           <form onSubmit={confirmCheckIn} className="mb-3">
             <div className="mb-3">

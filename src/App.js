@@ -1,6 +1,7 @@
 import "bootstrap/dist/css/bootstrap.min.css";
 import React, { useEffect, useMemo, useState } from "react";
 import { BrowserRouter as Router, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { Toaster } from "sonner";
 
 import { auth, firestore } from "./firebase";
 import Navbar from "./components/Navbar";
@@ -112,6 +113,7 @@ function App() {
   return (
     <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <div className="bg-dark min-vh-100 text-light overflow-hidden">
+        <Toaster theme="dark" richColors position="top-right" />
         {user && <Navbar userRole={userRole} userEmail={user?.email} />}
 
         <div className="container-fluid p-0">

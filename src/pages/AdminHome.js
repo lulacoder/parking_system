@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 import { firestore, functionsClient } from "../firebase";
 
 function AdminHome() {
@@ -6,10 +7,9 @@ function AdminHome() {
   const [parkings, setParkings] = useState([]);
   const [operators, setOperators] = useState([]);
   const [ownerForm, setOwnerForm] = useState({
-    ownerId: "",
-    userId: "",
     fullName: "",
     email: "",
+    password: "",
     phone: "",
     bankAccountNumber: "",
   });
@@ -33,19 +33,27 @@ function AdminHome() {
     assign: true,
   });
   const [loading, setLoading] = useState("");
-  const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
 
   useEffect(() => {
-    const unsubOwners = firestore.collection("owners").onSnapshot((snap) => {
-      setOwners(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-    });
-    const unsubParkings = firestore.collection("parkings").onSnapshot((snap) => {
-      setParkings(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-    });
-    const unsubOperators = firestore.collection("users").where("role", "==", "operator").onSnapshot((snap) => {
-      setOperators(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-    });
+    const unsubOwners = firestore.collection("owners").onSnapshot(
+      (snap) => {
+        const nextOwners = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        setOwners(nextOwners);
+        setParkingForm((prev) => {
+          if (prev.ownerId || !nextOwners.length) return prev;
+          return { ...prev, ownerId: nextOwners[0].ownerId || nextOwners[0].id };
+        });
+      },
+      (err) => toast.error(err.message || "Failed to load owners.")
+    );
+    const unsubParkings = firestore.collection("parkings").onSnapshot(
+      (snap) => setParkings(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+      (err) => toast.error(err.message || "Failed to load parkings.")
+    );
+    const unsubOperators = firestore.collection("users").where("role", "==", "operator").onSnapshot(
+      (snap) => setOperators(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+      (err) => toast.error(err.message || "Failed to load operators.")
+    );
     return () => {
       unsubOwners();
       unsubParkings();
@@ -65,15 +73,13 @@ function AdminHome() {
 
   const callFn = async (name, payload) => {
     setLoading(name);
-    setError("");
-    setMessage("");
     try {
       const callable = functionsClient.httpsCallable(name);
       const result = await callable(payload);
-      setMessage(`${name} successful.`);
+      toast.success(`${name} successful.`);
       return result.data;
     } catch (err) {
-      setError(err.message || `${name} failed`);
+      toast.error(err.message || `${name} failed`);
       return null;
     } finally {
       setLoading("");
@@ -82,7 +88,11 @@ function AdminHome() {
 
   const submitOwner = async (e) => {
     e.preventDefault();
-    await callFn("createOwnerProfile", ownerForm);
+    const data = await callFn("createOwnerAccount", ownerForm);
+    if (data?.ownerId) {
+      setOwnerForm({ fullName: "", email: "", password: "", phone: "", bankAccountNumber: "" });
+      setParkingForm((prev) => ({ ...prev, ownerId: data.ownerId }));
+    }
   };
 
   const submitParking = async (e) => {
@@ -107,10 +117,6 @@ function AdminHome() {
         </div>
       </div>
 
-      {(error || message) && (
-        <div className={`alert ${error ? "alert-danger" : "alert-success"}`}>{error || message}</div>
-      )}
-
       <div className="row g-3 mb-4">
         <StatCard title="Owners" value={stats.owners} />
         <StatCard title="Parkings" value={stats.parkings} />
@@ -122,20 +128,24 @@ function AdminHome() {
         <div className="col-lg-4">
           <div className="card border-0 shadow-sm h-100">
             <div className="card-body">
-              <h5 className="fw-bold mb-3">Create / Update Owner</h5>
+              <h5 className="fw-bold mb-3">Create Owner Account</h5>
               <form onSubmit={submitOwner}>
-                <FormInput label="Owner ID" value={ownerForm.ownerId} onChange={(v) => setOwnerForm({ ...ownerForm, ownerId: v })} />
-                <FormInput label="Owner User UID" value={ownerForm.userId} onChange={(v) => setOwnerForm({ ...ownerForm, userId: v })} />
                 <FormInput label="Full Name" value={ownerForm.fullName} onChange={(v) => setOwnerForm({ ...ownerForm, fullName: v })} />
                 <FormInput label="Email" value={ownerForm.email} onChange={(v) => setOwnerForm({ ...ownerForm, email: v })} />
+                <FormInput
+                  label="Temporary Password"
+                  type="password"
+                  value={ownerForm.password}
+                  onChange={(v) => setOwnerForm({ ...ownerForm, password: v })}
+                />
                 <FormInput label="Phone" value={ownerForm.phone} onChange={(v) => setOwnerForm({ ...ownerForm, phone: v })} />
                 <FormInput
                   label="Bank Account"
                   value={ownerForm.bankAccountNumber}
                   onChange={(v) => setOwnerForm({ ...ownerForm, bankAccountNumber: v })}
                 />
-                <button className="btn btn-primary w-100" disabled={loading === "createOwnerProfile"}>
-                  {loading === "createOwnerProfile" ? "Saving..." : "Save Owner"}
+                <button className="btn btn-primary w-100" disabled={loading === "createOwnerAccount"}>
+                  {loading === "createOwnerAccount" ? "Creating..." : "Create Owner"}
                 </button>
               </form>
             </div>
@@ -153,7 +163,22 @@ function AdminHome() {
                   required={false}
                   onChange={(v) => setParkingForm({ ...parkingForm, parkingId: v })}
                 />
-                <FormInput label="Owner ID" value={parkingForm.ownerId} onChange={(v) => setParkingForm({ ...parkingForm, ownerId: v })} />
+                <div className="mb-2">
+                  <label className="form-label small fw-semibold">Owner</label>
+                  <select
+                    className="form-select"
+                    value={parkingForm.ownerId}
+                    onChange={(e) => setParkingForm({ ...parkingForm, ownerId: e.target.value })}
+                    required
+                  >
+                    <option value="">Choose owner...</option>
+                    {owners.map((owner) => (
+                      <option key={owner.id} value={owner.ownerId || owner.id}>
+                        {owner.fullName || owner.ownerId} ({owner.email || "no-email"})
+                      </option>
+                    ))}
+                  </select>
+                </div>
                 <FormInput label="Parking Name" value={parkingForm.name} onChange={(v) => setParkingForm({ ...parkingForm, name: v })} />
                 <FormInput label="Address" value={parkingForm.address} onChange={(v) => setParkingForm({ ...parkingForm, address: v })} />
                 <FormInput

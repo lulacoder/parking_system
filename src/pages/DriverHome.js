@@ -1,7 +1,10 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { GoogleMap, Marker, useJsApiLoader } from "@react-google-maps/api";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Circle, GoogleMap, Marker, useJsApiLoader } from "@react-google-maps/api";
 import { useNavigate } from "react-router-dom";
+import { toast } from "sonner";
 import { auth, firestore, functionsClient } from "../firebase";
+
+const SEEDED_IDS = ["lot_01", "lot_02"];
 
 function formatDate(value) {
   if (!value) return "N/A";
@@ -35,6 +38,7 @@ function parkingCoords(parking) {
 
 function DriverHome() {
   const navigate = useNavigate();
+  const mapRef = useRef(null);
   const [parkings, setParkings] = useState([]);
   const [selectedParkingId, setSelectedParkingId] = useState("");
   const [plateNumber, setPlateNumber] = useState("");
@@ -43,8 +47,6 @@ function DriverHome() {
   const [loading, setLoading] = useState(false);
   const [checkoutLoadingId, setCheckoutLoadingId] = useState("");
   const [qrTokenInput, setQrTokenInput] = useState("");
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
   const mapsApiKey = (process.env.REACT_APP_GOOGLE_MAPS_API_KEY || "").trim();
   const { isLoaded, loadError } = useJsApiLoader({
     id: "driver-map-script",
@@ -58,10 +60,18 @@ function DriverHome() {
       .onSnapshot(
         (snapshot) => {
           const list = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+          list.sort((a, b) => {
+            const aIdx = SEEDED_IDS.indexOf(a.id);
+            const bIdx = SEEDED_IDS.indexOf(b.id);
+            if (aIdx !== -1 && bIdx !== -1) return aIdx - bIdx;
+            if (aIdx !== -1) return -1;
+            if (bIdx !== -1) return 1;
+            return String(a.name || a.id).localeCompare(String(b.name || b.id));
+          });
           setParkings(list);
           if (!selectedParkingId && list.length) setSelectedParkingId(list[0].id);
         },
-        (err) => setError(err.message)
+        (err) => toast.error(err.message || "Failed to load parking locations.")
       );
     return () => unsub();
   }, [selectedParkingId]);
@@ -75,7 +85,7 @@ function DriverHome() {
       .where("status", "in", ["reserved", "checked_in"])
       .onSnapshot(
         (snapshot) => setActiveBookings(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }))),
-        (err) => setError(err.message)
+        (err) => toast.error(err.message || "Failed to load active bookings.")
       );
     return () => unsub();
   }, []);
@@ -89,7 +99,7 @@ function DriverHome() {
       .where("status", "==", "active")
       .onSnapshot(
         (snapshot) => setActiveSessions(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }))),
-        (err) => setError(err.message)
+        (err) => toast.error(err.message || "Failed to load active sessions.")
       );
     return () => unsub();
   }, []);
@@ -113,10 +123,26 @@ function DriverHome() {
     return { lat: 8.997, lng: 38.786 };
   }, [mapPoints, selectedParking]);
 
+  useEffect(() => {
+    const selected = parkingCoords(selectedParking);
+    const map = mapRef.current;
+    if (!selected || !map || !window.google?.maps) return;
+
+    const radiusCircle = new window.google.maps.Circle({
+      center: selected,
+      radius: 1000,
+    });
+    const bounds = radiusCircle.getBounds();
+    if (bounds) {
+      map.fitBounds(bounds, 24);
+    } else {
+      map.panTo(selected);
+      map.setZoom(14);
+    }
+  }, [selectedParking]);
+
   const reserveSlot = async (e) => {
     e.preventDefault();
-    setError("");
-    setSuccess("");
     setLoading(true);
     try {
       const callable = functionsClient.httpsCallable("createBooking");
@@ -124,18 +150,16 @@ function DriverHome() {
         parkingId: selectedParkingId,
         plateNumber,
       });
-      setSuccess(`Booking created: ${response.data.bookingId}`);
+      toast.success(`Booking created: ${response.data.bookingId}`);
       setPlateNumber("");
     } catch (err) {
-      setError(err.message || "Failed to create booking.");
+      toast.error(err.message || "Failed to create booking.");
     } finally {
       setLoading(false);
     }
   };
 
   const driverCheckout = async (session) => {
-    setError("");
-    setSuccess("");
     setCheckoutLoadingId(session.id);
     try {
       const callable = functionsClient.httpsCallable("driverCheckOutVehicle");
@@ -143,9 +167,9 @@ function DriverHome() {
         parkingId: session.parkingId,
         plateNumber: session.plateNumber,
       });
-      setSuccess(`Checkout complete. Fee: ${response.data.feeAmount} ETB`);
+      toast.success(`Checkout complete. Fee: ${response.data.feeAmount} ETB`);
     } catch (err) {
-      setError(err.message || "Failed to check out.");
+      toast.error(err.message || "Failed to check out.");
     } finally {
       setCheckoutLoadingId("");
     }
@@ -201,12 +225,22 @@ function DriverHome() {
         </div>
       </div>
 
-      {error && <div className="alert alert-danger">{error}</div>}
-      {success && <div className="alert alert-success">{success}</div>}
-
       <div className="card border-0 shadow-sm mb-4">
         <div className="card-body">
           <h5 className="fw-bold mb-3">Choose Parking on Map</h5>
+          <div className="d-flex flex-wrap gap-2 mb-3">
+            {parkings.map((parking) => (
+              <button
+                key={parking.id}
+                type="button"
+                className={`btn btn-sm ${parking.id === selectedParkingId ? "btn-primary" : "btn-outline-light text-dark"}`}
+                onClick={() => setSelectedParkingId(parking.id)}
+              >
+                {parking.name} - {parking.availableSlots ?? 0} open
+              </button>
+            ))}
+          </div>
+
           {!mapsApiKey ? (
             <div className="alert alert-warning mb-0">Google Maps API key is missing in `.env`.</div>
           ) : loadError ? (
@@ -216,27 +250,43 @@ function DriverHome() {
               mapContainerStyle={{ width: "100%", height: "360px", borderRadius: "12px" }}
               center={mapCenter}
               zoom={13}
+              onLoad={(map) => {
+                mapRef.current = map;
+              }}
               options={{ streetViewControl: false, mapTypeControl: false }}
             >
+              {parkingCoords(selectedParking) && (
+                <Circle
+                  center={parkingCoords(selectedParking)}
+                  radius={1000}
+                  options={{
+                    strokeColor: "#0d6efd",
+                    strokeOpacity: 0.9,
+                    strokeWeight: 2,
+                    fillColor: "#0d6efd",
+                    fillOpacity: 0.12,
+                  }}
+                />
+              )}
               {mapPoints.map(({ parking, coords }) => (
-                  <Marker
-                    key={parking.id}
-                    position={coords}
-                    title={parking.name}
-                    onClick={() => setSelectedParkingId(parking.id)}
-                    label={{
-                      text: parking.id === selectedParkingId ? "Selected" : `${parking.availableSlots ?? 0}`,
-                      color: "#ffffff",
-                      fontWeight: "bold",
-                    }}
-                    icon={{
-                      url:
-                        parking.id === selectedParkingId
-                          ? "http://maps.google.com/mapfiles/ms/icons/blue-dot.png"
-                          : "http://maps.google.com/mapfiles/ms/icons/red-dot.png",
-                    }}
-                  />
-                ))}
+                <Marker
+                  key={parking.id}
+                  position={coords}
+                  title={parking.name}
+                  onClick={() => setSelectedParkingId(parking.id)}
+                  label={{
+                    text: parking.id === selectedParkingId ? "Selected" : `${parking.availableSlots ?? 0}`,
+                    color: "#ffffff",
+                    fontWeight: "bold",
+                  }}
+                  icon={{
+                    url:
+                      parking.id === selectedParkingId
+                        ? "http://maps.google.com/mapfiles/ms/icons/blue-dot.png"
+                        : "http://maps.google.com/mapfiles/ms/icons/red-dot.png",
+                  }}
+                />
+              ))}
             </GoogleMap>
           ) : (
             <div className="d-flex align-items-center gap-2">

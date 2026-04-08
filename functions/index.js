@@ -443,6 +443,81 @@ exports.driverCheckOutVehicle = onCall(CALLABLE_OPTIONS, async (request) => {
   return result;
 });
 
+exports.createOwnerAccount = onCall(CALLABLE_OPTIONS, async (request) => {
+  const actorUid = request.auth?.uid;
+  await requireRole(request, "admin");
+
+  const fullName = String(request.data?.fullName || "").trim();
+  const email = normalizeEmail(request.data?.email);
+  const password = String(request.data?.password || "").trim();
+  const phone = String(request.data?.phone || "").trim();
+  const bankAccountNumber = String(request.data?.bankAccountNumber || "").trim();
+
+  if (!fullName || !email || !password) {
+    throw new HttpsError("invalid-argument", "fullName, email, and password are required.");
+  }
+  if (password.length < 6) {
+    throw new HttpsError("invalid-argument", "Password must be at least 6 characters.");
+  }
+
+  let ownerAuthUser = null;
+  try {
+    ownerAuthUser = await admin.auth().createUser({
+      email,
+      password,
+      displayName: fullName,
+    });
+  } catch (error) {
+    if (error.code === "auth/email-already-exists") {
+      throw new HttpsError("already-exists", "Email is already in use.");
+    }
+    throw new HttpsError("internal", "Failed to create owner auth account.");
+  }
+
+  const ownerUid = ownerAuthUser.uid;
+  const ownerId = `owner_${ownerUid}`;
+  const ownerRef = db.collection("owners").doc(ownerId);
+  const userRef = db.collection("users").doc(ownerUid);
+  const now = nowMs();
+
+  await db.runTransaction(async (tx) => {
+    tx.set(
+      userRef,
+      {
+        fullName,
+        email,
+        phone,
+        role: "owner",
+        status: "active",
+        ownerId,
+        assignedParkingIds: [],
+        createdAt: now,
+        updatedAt: now,
+      },
+      { merge: true }
+    );
+
+    tx.set(
+      ownerRef,
+      {
+        ownerId,
+        userId: ownerUid,
+        fullName,
+        email,
+        phone,
+        bankAccountNumber,
+        status: "active",
+        createdAt: ts(now),
+        updatedAt: ts(now),
+      },
+      { merge: true }
+    );
+  });
+
+  await writeAuditLog("CREATE_OWNER_ACCOUNT", actorUid, null, { ownerId, ownerUid, email });
+  return { ownerId, userId: ownerUid, email };
+});
+
 exports.createParkingCheckInToken = onCall(CALLABLE_OPTIONS, async (request) => {
   const actorUid = request.auth?.uid;
   await requireRole(request, "operator");

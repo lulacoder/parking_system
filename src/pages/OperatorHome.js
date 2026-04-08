@@ -8,6 +8,10 @@ function OperatorHome() {
   const [plateNumber, setPlateNumber] = useState("");
   const [allowWalkIn, setAllowWalkIn] = useState(true);
   const [activeSessions, setActiveSessions] = useState([]);
+  const [pendingRequests, setPendingRequests] = useState([]);
+  const [qrPayload, setQrPayload] = useState(null);
+  const [qrLoading, setQrLoading] = useState(false);
+  const [qrRefreshNonce, setQrRefreshNonce] = useState(0);
   const [loadingAction, setLoadingAction] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -15,12 +19,35 @@ function OperatorHome() {
   useEffect(() => {
     const uid = auth.currentUser?.uid;
     if (!uid) return undefined;
-    const unsub = firestore.collection("users").doc(uid).onSnapshot((snap) => {
-      const profile = snap.exists ? snap.data() : null;
-      const assigned = Array.isArray(profile?.assignedParkingIds) ? profile.assignedParkingIds : [];
-      setAssignedParkingIds(assigned);
-      if (!selectedParkingId && assigned.length) setSelectedParkingId(assigned[0]);
-    });
+    const unsub = firestore.collection("users").doc(uid).onSnapshot(
+      (snap) => {
+        const profile = snap.exists ? snap.data() : null;
+        const assigned = Array.isArray(profile?.assignedParkingIds) ? profile.assignedParkingIds : [];
+        setAssignedParkingIds(assigned);
+        if (!selectedParkingId && assigned.length) setSelectedParkingId(assigned[0]);
+      },
+      (err) => setError(err.message)
+    );
+    return () => unsub();
+  }, [selectedParkingId, qrRefreshNonce]);
+
+  useEffect(() => {
+    if (!selectedParkingId) {
+      setPendingRequests([]);
+      return undefined;
+    }
+    const unsub = firestore
+      .collection("checkInRequests")
+      .where("parkingId", "==", selectedParkingId)
+      .where("status", "==", "pending")
+      .onSnapshot(
+        (snapshot) => {
+          const list = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+          list.sort((a, b) => getMs(b.createdAt) - getMs(a.createdAt));
+          setPendingRequests(list);
+        },
+        (err) => setError(err.message)
+      );
     return () => unsub();
   }, [selectedParkingId]);
 
@@ -32,14 +59,17 @@ function OperatorHome() {
     setParkings([]);
     let mounted = true;
     const unsubscribers = assignedParkingIds.map((parkingId) =>
-      firestore.collection("parkings").doc(parkingId).onSnapshot((docSnap) => {
-        if (!mounted) return;
-        setParkings((prev) => {
-          const filtered = prev.filter((p) => p.id !== parkingId);
-          if (!docSnap.exists) return filtered;
-          return [...filtered, { id: docSnap.id, ...docSnap.data() }].sort((a, b) => a.name.localeCompare(b.name));
-        });
-      })
+      firestore.collection("parkings").doc(parkingId).onSnapshot(
+        (docSnap) => {
+          if (!mounted) return;
+          setParkings((prev) => {
+            const filtered = prev.filter((p) => p.id !== parkingId);
+            if (!docSnap.exists) return filtered;
+            return [...filtered, { id: docSnap.id, ...docSnap.data() }].sort((a, b) => a.name.localeCompare(b.name));
+          });
+        },
+        (err) => setError(err.message)
+      )
     );
     return () => {
       mounted = false;
@@ -57,9 +87,12 @@ function OperatorHome() {
       .where("parkingId", "==", selectedParkingId)
       .where("status", "==", "active")
       .orderBy("entryTime", "desc")
-      .onSnapshot((snapshot) => {
-        setActiveSessions(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
-      });
+      .onSnapshot(
+        (snapshot) => {
+          setActiveSessions(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
+        },
+        (err) => setError(err.message)
+      );
     return () => unsub();
   }, [selectedParkingId]);
 
@@ -67,6 +100,37 @@ function OperatorHome() {
     () => parkings.find((parking) => parking.id === selectedParkingId) || null,
     [parkings, selectedParkingId]
   );
+
+  useEffect(() => {
+    if (!selectedParkingId) {
+      setQrPayload(null);
+      return undefined;
+    }
+
+    let active = true;
+    let timer = null;
+    const refreshQr = async () => {
+      try {
+        setQrLoading(true);
+        const callable = functionsClient.httpsCallable("createParkingCheckInToken");
+        const response = await callable({ parkingId: selectedParkingId });
+        if (!active) return;
+        setQrPayload(response.data);
+      } catch (err) {
+        if (!active) return;
+        setError(err.message || "Failed to create QR token.");
+      } finally {
+        if (active) setQrLoading(false);
+      }
+    };
+
+    refreshQr();
+    timer = setInterval(refreshQr, 55000);
+    return () => {
+      active = false;
+      if (timer) clearInterval(timer);
+    };
+  }, [selectedParkingId]);
 
   const callAction = async (name, payload) => {
     setLoadingAction(name);
@@ -98,6 +162,22 @@ function OperatorHome() {
     }
   };
 
+  const onApproveRequest = async (requestId) => {
+    const result = await callAction("approveCheckInRequest", { requestId });
+    if (result?.sessionId) {
+      setMessage(`Request approved. Session ${result.sessionId} started.`);
+    }
+  };
+
+  const onRejectRequest = async (requestId) => {
+    await callAction("rejectCheckInRequest", { requestId });
+  };
+
+  const qrLink = qrPayload?.deepLink || "";
+  const qrImageUrl = qrLink
+    ? `https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(qrLink)}`
+    : "";
+
   return (
     <div className="container py-4">
       <div className="card border-0 shadow-sm mb-4">
@@ -111,6 +191,42 @@ function OperatorHome() {
       {message && <div className="alert alert-success">{message}</div>}
 
       <div className="row g-4">
+        <div className="col-12">
+          <div className="card border-0 shadow-sm">
+            <div className="card-body">
+              <div className="d-flex justify-content-between align-items-center mb-2">
+                <h5 className="fw-bold mb-0">Driver Check-In QR</h5>
+                <button
+                  className="btn btn-outline-primary btn-sm"
+                  onClick={() => setQrRefreshNonce((n) => n + 1)}
+                  disabled={qrLoading}
+                >
+                  {qrLoading ? "Refreshing..." : "Refresh"}
+                </button>
+              </div>
+              {!selectedParkingId ? (
+                <div className="text-muted">Select a parking to generate QR.</div>
+              ) : qrLoading && !qrPayload ? (
+                <div className="text-muted">Generating QR...</div>
+              ) : qrPayload ? (
+                <div className="d-flex flex-column flex-md-row gap-3 align-items-start">
+                  <img src={qrImageUrl} alt="Check-in QR" width={220} height={220} style={{ borderRadius: "10px" }} />
+                  <div>
+                    <div className="small text-muted mb-2">Scan with phone camera. Driver will confirm plate and wait for approval.</div>
+                    <div className="small text-muted mb-2">Token: {qrPayload.tokenId}</div>
+                    <div className="small text-muted mb-2">Expires: {new Date(qrPayload.expiresAtMs || 0).toLocaleTimeString()}</div>
+                    <a href={qrLink} target="_blank" rel="noreferrer">
+                      Open Deep Link
+                    </a>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-muted">QR unavailable.</div>
+              )}
+            </div>
+          </div>
+        </div>
+
         <div className="col-lg-6">
           <div className="card border-0 shadow-sm">
             <div className="card-body">
@@ -199,10 +315,53 @@ function OperatorHome() {
               )}
             </div>
           </div>
+
+          <div className="card border-0 shadow-sm mt-3">
+            <div className="card-body">
+              <h5 className="fw-bold mb-2">Pending QR Confirmations</h5>
+              {!pendingRequests.length ? (
+                <div className="text-muted">No pending confirmations.</div>
+              ) : (
+                <div className="list-group">
+                  {pendingRequests.map((request) => (
+                    <div className="list-group-item" key={request.id}>
+                      <div className="fw-bold">{request.plateNumber}</div>
+                      <div className="small text-muted">Driver: {request.driverUid}</div>
+                      <div className="small text-muted mb-2">Requested: {new Date(getMs(request.createdAt)).toLocaleString()}</div>
+                      <div className="d-flex gap-2">
+                        <button
+                          className="btn btn-sm btn-success"
+                          disabled={loadingAction === "approveCheckInRequest"}
+                          onClick={() => onApproveRequest(request.id)}
+                        >
+                          Approve
+                        </button>
+                        <button
+                          className="btn btn-sm btn-outline-danger"
+                          disabled={loadingAction === "rejectCheckInRequest"}
+                          onClick={() => onRejectRequest(request.id)}
+                        >
+                          Reject
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       </div>
     </div>
   );
+}
+
+function getMs(value) {
+  if (!value) return 0;
+  if (typeof value === "number") return value;
+  if (value.toMillis) return value.toMillis();
+  if (value.seconds) return value.seconds * 1000;
+  return 0;
 }
 
 export default OperatorHome;

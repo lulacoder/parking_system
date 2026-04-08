@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { GoogleMap, Marker, useJsApiLoader } from "@react-google-maps/api";
+import { useNavigate } from "react-router-dom";
 import { auth, firestore, functionsClient } from "../firebase";
 
 function formatDate(value) {
@@ -33,11 +34,15 @@ function parkingCoords(parking) {
 }
 
 function DriverHome() {
+  const navigate = useNavigate();
   const [parkings, setParkings] = useState([]);
   const [selectedParkingId, setSelectedParkingId] = useState("");
   const [plateNumber, setPlateNumber] = useState("");
   const [activeBookings, setActiveBookings] = useState([]);
+  const [activeSessions, setActiveSessions] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [checkoutLoadingId, setCheckoutLoadingId] = useState("");
+  const [qrTokenInput, setQrTokenInput] = useState("");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const mapsApiKey = (process.env.REACT_APP_GOOGLE_MAPS_API_KEY || "").trim();
@@ -70,6 +75,20 @@ function DriverHome() {
       .where("status", "in", ["reserved", "checked_in"])
       .onSnapshot(
         (snapshot) => setActiveBookings(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }))),
+        (err) => setError(err.message)
+      );
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return undefined;
+    const unsub = firestore
+      .collection("sessions")
+      .where("driverId", "==", uid)
+      .where("status", "==", "active")
+      .onSnapshot(
+        (snapshot) => setActiveSessions(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }))),
         (err) => setError(err.message)
       );
     return () => unsub();
@@ -114,8 +133,67 @@ function DriverHome() {
     }
   };
 
+  const driverCheckout = async (session) => {
+    setError("");
+    setSuccess("");
+    setCheckoutLoadingId(session.id);
+    try {
+      const callable = functionsClient.httpsCallable("driverCheckOutVehicle");
+      const response = await callable({
+        parkingId: session.parkingId,
+        plateNumber: session.plateNumber,
+      });
+      setSuccess(`Checkout complete. Fee: ${response.data.feeAmount} ETB`);
+    } catch (err) {
+      setError(err.message || "Failed to check out.");
+    } finally {
+      setCheckoutLoadingId("");
+    }
+  };
+
+  const goToQrConfirm = () => {
+    const trimmed = qrTokenInput.trim();
+    if (!trimmed) {
+      navigate("/driver/checkin-confirm");
+      return;
+    }
+
+    // Accept either full URL from QR or raw token value for desktop testing.
+    try {
+      const parsed = new URL(trimmed);
+      const token = parsed.searchParams.get("token");
+      if (token) {
+        navigate(`/driver/checkin-confirm?token=${encodeURIComponent(token)}`);
+        return;
+      }
+    } catch (_) {
+      // Not a URL; treat as raw token.
+    }
+    navigate(`/driver/checkin-confirm?token=${encodeURIComponent(trimmed)}`);
+  };
+
   return (
     <div className="container py-4">
+      <div className="card border-0 shadow-sm mb-4">
+        <div className="card-body">
+          <h5 className="fw-bold mb-2">QR Check-In</h5>
+          <p className="text-muted mb-3">
+            Scan operator QR with your phone camera, or paste token/link below for desktop testing.
+          </p>
+          <div className="d-flex flex-column flex-md-row gap-2">
+            <input
+              className="form-control"
+              placeholder="Paste QR link or token (optional)"
+              value={qrTokenInput}
+              onChange={(e) => setQrTokenInput(e.target.value)}
+            />
+            <button type="button" className="btn btn-primary" onClick={goToQrConfirm}>
+              Open QR Check-In
+            </button>
+          </div>
+        </div>
+      </div>
+
       <div className="card border-0 shadow-sm mb-4">
         <div className="card-body">
           <h3 className="fw-bold mb-2">Driver Booking</h3>
@@ -242,6 +320,32 @@ function DriverHome() {
                       <div className="fw-bold">{booking.plateNumber}</div>
                       <div className="small text-muted">Status: {booking.status}</div>
                       <div className="small text-muted">Expires: {formatDate(booking.expiresAt)}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="card border-0 shadow-sm mt-3">
+            <div className="card-body">
+              <h5 className="fw-bold mb-3">My Active Sessions</h5>
+              {!activeSessions.length ? (
+                <div className="text-muted">No active sessions.</div>
+              ) : (
+                <div className="list-group">
+                  {activeSessions.map((session) => (
+                    <div key={session.id} className="list-group-item">
+                      <div className="fw-bold">{session.plateNumber}</div>
+                      <div className="small text-muted mb-2">Parking: {session.parkingId}</div>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-warning"
+                        disabled={checkoutLoadingId === session.id}
+                        onClick={() => driverCheckout(session)}
+                      >
+                        {checkoutLoadingId === session.id ? "Checking out..." : "Check Out"}
+                      </button>
                     </div>
                   ))}
                 </div>

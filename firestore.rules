@@ -104,6 +104,20 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    match /checkInTokens/{tokenId} {
+      allow read: if isAdmin() || isAssignedOperator(resource.data.parkingId);
+      allow write: if false;
+    }
+
+    match /checkInRequests/{requestId} {
+      allow read: if isAdmin()
+        || (isDriver() && resource.data.driverUid == request.auth.uid)
+        || (isOwner() && resource.data.ownerId == ownerIdOfUser())
+        || parkingOwnedByCaller(resource.data.parkingId)
+        || isAssignedOperator(resource.data.parkingId);
+      allow write: if false;
+    }
+
     match /dailyReports/{reportId} {
       allow read: if isAdmin() || (isOwner() && resource.data.ownerId == ownerIdOfUser());
       allow write: if false;

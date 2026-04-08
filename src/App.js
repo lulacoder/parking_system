@@ -1,6 +1,6 @@
 import "bootstrap/dist/css/bootstrap.min.css";
 import React, { useEffect, useMemo, useState } from "react";
-import { BrowserRouter as Router, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter as Router, Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 import { auth, firestore } from "./firebase";
 import Navbar from "./components/Navbar";
@@ -10,6 +10,7 @@ import DriverHome from "./pages/DriverHome";
 import AdminHome from "./pages/AdminHome";
 import OwnerHome from "./pages/OwnerHome";
 import OperatorHome from "./pages/OperatorHome";
+import DriverCheckInConfirm from "./pages/DriverCheckInConfirm";
 import { RedirectHome, RequireAuth, RequireRole } from "./app/RoleGuards";
 import { FALLBACK_ROLE, getRoleHome, sanitizeRole } from "./app/roleUtils";
 
@@ -115,8 +116,9 @@ function App() {
 
         <div className="container-fluid p-0">
           <Routes>
-            <Route path="/login" element={user ? <Navigate to={roleHome} replace /> : <Login />} />
+            <Route path="/login" element={<LoginRoute user={user} role={userRole} />} />
             <Route path="/signup" element={user ? <Navigate to={roleHome} replace /> : <Signup />} />
+            <Route path="/driver/checkin-confirm" element={<DriverCheckInConfirmRoute user={user} role={userRole} />} />
 
             <Route element={<RequireAuth user={user} loading={loading} />}>
               <Route element={<RequireRole user={user} role={userRole} allowedRoles={["driver"]} />}>
@@ -147,6 +149,32 @@ function App() {
       </div>
     </Router>
   );
+}
+
+function LoginRoute({ user, role }) {
+  const location = useLocation();
+  if (!user) return <Login />;
+
+  const params = new URLSearchParams(location.search);
+  const next = params.get("next") || "";
+  const isSafeInternalPath = next.startsWith("/") && !next.startsWith("//");
+  const sanitizedRole = sanitizeRole(role);
+  if (isSafeInternalPath && (sanitizedRole === "driver" || !next.startsWith("/driver"))) {
+    return <Navigate to={next} replace />;
+  }
+  return <Navigate to={getRoleHome(sanitizedRole)} replace />;
+}
+
+function DriverCheckInConfirmRoute({ user, role }) {
+  const location = useLocation();
+  if (!user) {
+    const next = encodeURIComponent(`${location.pathname}${location.search}`);
+    return <Navigate to={`/login?next=${next}`} replace />;
+  }
+  if (sanitizeRole(role) !== "driver") {
+    return <Navigate to={getRoleHome(role)} replace />;
+  }
+  return <DriverCheckInConfirm />;
 }
 
 export default App;

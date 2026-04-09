@@ -1,72 +1,53 @@
 import React from "react";
+import { LogOut, Shield } from "lucide-react";
 import { auth } from "../firebase";
+import { Badge } from "./ui/badge";
+import { Button } from "./ui/button";
 
 function Navbar({ userRole, userEmail }) {
   const handleLogout = () => {
-    // ተጠቃሚው በስህተት እንዳይወጣ ማረጋገጫ መጠየቅ
-    if (window.confirm("እርግጠኛ ነዎት ከመለያዎ መውጣት ይፈልጋሉ?")) {
+    if (window.confirm("Are you sure you want to logout?")) {
       auth.signOut();
     }
   };
 
-  // የሥራ ድርሻውን ወደ አማርኛ መቀየር (ለተጠቃሚው እንዲቀል)
-  const getRoleLabel = (role) => {
-    const roles = {
-      admin: "ሲስተም አድሚን",
-      owner: "የፓርኪንግ ባለቤት",
-      operator: "ኦፕሬተር",
-      user: "አሽከርካሪ (Driver)",
-      driver: "አሽከርካሪ (Driver)"
-    };
-    return roles[role] || role;
+  const roleLabel = {
+    admin: "Admin",
+    owner: "Owner",
+    operator: "Operator",
+    driver: "Driver",
+    user: "Driver",
   };
 
   return (
-    <nav className="navbar navbar-expand-lg navbar-dark bg-primary shadow-lg sticky-top px-3 py-2">
-      <div className="container-fluid">
-        {/* የሲስተሙ ስም እና አርማ */}
-        <div className="navbar-brand fw-bold d-flex align-items-center" style={{ cursor: 'default' }}>
-          <div className="bg-white rounded-circle p-1 me-2 shadow-sm d-flex align-items-center justify-content-center" style={{ width: '40px', height: '40px' }}>
-            <span className="fs-4">🚗</span>
+    <header className="sticky top-0 z-40 border-b border-border/60 bg-white/90 backdrop-blur">
+      <div className="mx-auto flex w-full max-w-[1400px] items-center justify-between px-4 py-3 md:px-6">
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 text-lg text-white shadow-soft">
+            <span>🚗</span>
           </div>
-          <div className="d-flex flex-column" style={{ lineHeight: '1.1' }}>
-            <span className="tracking-wider fs-4">ENDERASE</span>
-            <small className="text-white-50 fw-normal" style={{ fontSize: '10px', letterSpacing: '1px' }}>SMART PARKING</small>
+          <div>
+            <p className="font-heading text-xl font-bold tracking-wide text-slate-900">ENDERASE</p>
+            <p className="text-xs font-medium uppercase tracking-[0.2em] text-slate-500">Smart Parking</p>
           </div>
         </div>
 
-        {/* የተጠቃሚ መረጃ እና መውጫ (Logout) */}
-        <div className="d-flex align-items-center ms-auto bg-dark bg-opacity-10 p-2 rounded-4 px-3 border border-white border-opacity-10 shadow-inner">
-          <div className="me-3 text-end d-none d-md-block border-end pe-3 border-white border-opacity-25">
-            <div className="fw-bold text-white small mb-0" style={{ fontSize: '0.85rem' }}>
-              {userEmail}
+        <div className="flex items-center gap-3">
+          <div className="hidden items-center gap-3 rounded-xl border border-border bg-card px-3 py-2 md:flex">
+            <Shield className="h-4 w-4 text-blue-600" />
+            <div className="text-right">
+              <p className="text-sm font-medium text-slate-700">{userEmail}</p>
+              <Badge variant="default">{roleLabel[userRole] || userRole}</Badge>
             </div>
-            <span className="badge bg-warning text-dark fw-bold" style={{ fontSize: "9px", padding: "3px 8px" }}>
-              {getRoleLabel(userRole)}
-            </span> 
           </div>
 
-          <button 
-            className="btn btn-danger btn-sm fw-bold px-3 ms-2 shadow" 
-            onClick={handleLogout}
-            style={{ 
-              borderRadius: "10px", 
-              fontSize: "13px",
-              transition: "0.2s"
-            }}
-          >
-            <i className="bi bi-box-arrow-right me-1"></i> ውጣ
-          </button>
+          <Button variant="destructive" size="sm" onClick={handleLogout}>
+            <LogOut className="h-4 w-4" />
+            Logout
+          </Button>
         </div>
       </div>
-
-      <style>{`
-        .tracking-wider { letter-spacing: 2px; }
-        .shadow-inner { box-shadow: inset 0 2px 4px rgba(0,0,0,0.05); }
-        .navbar { background: linear-gradient(90deg, #0d6efd 0%, #0b5ed7 100%); }
-        .btn-danger:hover { transform: scale(1.05); background-color: #dc3545 !important; }
-      `}</style>
-    </nav>
+    </header>
   );
 }
 

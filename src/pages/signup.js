@@ -1,6 +1,12 @@
 import React, { useState } from "react";
 import { Link } from "react-router-dom";
+import { Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import { auth, firestore } from "../firebase";
+import { Button } from "../components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import { Input } from "../components/ui/input";
+import { Label } from "../components/ui/label";
 
 function Signup() {
   const [formData, setFormData] = useState({
@@ -10,7 +16,6 @@ function Signup() {
     confirmPassword: "",
   });
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
 
   const handleChange = (e) => {
     setFormData((prev) => ({ ...prev, [e.target.name]: e.target.value }));
@@ -21,16 +26,15 @@ function Signup() {
     const { fullName, email, password, confirmPassword } = formData;
 
     if (password !== confirmPassword) {
-      setError("Passwords do not match.");
+      toast.error("Passwords do not match.");
       return;
     }
     if (password.length < 6) {
-      setError("Password must be at least 6 characters.");
+      toast.error("Password must be at least 6 characters.");
       return;
     }
 
     setLoading(true);
-    setError("");
 
     try {
       const userCredential = await auth.createUserWithEmailAndPassword(email, password);
@@ -47,113 +51,105 @@ function Signup() {
         createdAt: Date.now(),
         updatedAt: Date.now(),
       });
-      // Route changes are handled in App.js by auth + role state.
+      toast.success("Account created successfully.");
     } catch (err) {
       if (err.code === "auth/email-already-in-use") {
-        setError("This email is already in use.");
+        toast.error("This email is already in use.");
       } else if (err.code === "auth/invalid-email") {
-        setError("Please enter a valid email address.");
+        toast.error("Please enter a valid email address.");
       } else if (err.code === "auth/weak-password") {
-        setError("Password is too weak.");
+        toast.error("Password is too weak.");
       } else if (err.code === "auth/operation-not-allowed") {
-        setError("Email/password signup is not enabled in Firebase Authentication.");
+        toast.error("Email/password signup is not enabled in Firebase Auth.");
       } else {
-        setError(`Signup failed: ${err.message}`);
+        toast.error(`Signup failed: ${err.message}`);
       }
-      console.error("Signup failed:", err.code, err.message);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="container d-flex justify-content-center align-items-center min-vh-100 animate__animated animate__fadeIn">
-      <div className="card p-4 shadow-lg border-0" style={{ maxWidth: "450px", width: "100%", borderRadius: "25px" }}>
-        <div className="text-center mb-4">
-          <h2 className="fw-bold text-primary">Create Driver Account</h2>
-          <p className="text-muted small text-uppercase fw-bold">ENDERASE Smart Parking</p>
-        </div>
+    <div className="mx-auto flex min-h-[82vh] w-full max-w-xl items-center">
+      <Card className="w-full animate-fade-in-up">
+        <CardHeader className="text-center">
+          <CardTitle className="text-3xl">Create Driver Account</CardTitle>
+          <CardDescription>Get started with Enderase parking in under a minute.</CardDescription>
+        </CardHeader>
 
-        {error && <div className="alert alert-danger py-2 small text-center rounded-3">{error}</div>}
-
-        <form onSubmit={handleSignup}>
-          <div className="mb-2">
-            <label className="form-label small fw-bold">Full Name</label>
-            <input
-              type="text"
-              name="fullName"
-              className="form-control bg-light border-0 py-2"
-              placeholder="John Doe"
-              autoComplete="name"
-              required
-              onChange={handleChange}
-            />
-          </div>
-
-          <div className="mb-2">
-            <label className="form-label small fw-bold">Email</label>
-            <input
-              type="email"
-              name="email"
-              className="form-control bg-light border-0 py-2"
-              placeholder="example@mail.com"
-              autoComplete="email"
-              required
-              onChange={handleChange}
-            />
-          </div>
-
-          <div className="row g-2 mb-3">
-            <div className="col-6">
-              <label className="small fw-bold">Password</label>
-              <input
-                type="password"
-                name="password"
-                className="form-control bg-light border-0 py-2"
-                placeholder="••••••"
-                autoComplete="new-password"
-                required
+        <CardContent>
+          <form onSubmit={handleSignup} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="fullName">Full Name</Label>
+              <Input
+                id="fullName"
+                name="fullName"
+                value={formData.fullName}
                 onChange={handleChange}
+                placeholder="John Doe"
+                autoComplete="name"
+                required
               />
             </div>
-            <div className="col-6">
-              <label className="small fw-bold">Confirm</label>
-              <input
-                type="password"
-                name="confirmPassword"
-                className="form-control bg-light border-0 py-2"
-                placeholder="••••••"
-                autoComplete="new-password"
-                required
+
+            <div className="space-y-2">
+              <Label htmlFor="email">Email</Label>
+              <Input
+                id="email"
+                type="email"
+                name="email"
+                value={formData.email}
                 onChange={handleChange}
+                placeholder="example@mail.com"
+                autoComplete="email"
+                required
               />
             </div>
-          </div>
 
-          <button
-            type="submit"
-            className="btn btn-primary w-100 py-2 fw-bold shadow-sm d-flex align-items-center justify-content-center gap-2"
-            disabled={loading}
-            style={{ borderRadius: "12px" }}
-          >
-            <span
-              className="spinner-border spinner-border-sm"
-              style={{ visibility: loading ? "visible" : "hidden" }}
-              aria-hidden={!loading}
-            ></span>
-            <span>{loading ? "Creating account..." : "Create Account"}</span>
-          </button>
-        </form>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="password">Password</Label>
+                <Input
+                  id="password"
+                  type="password"
+                  name="password"
+                  value={formData.password}
+                  onChange={handleChange}
+                  placeholder="••••••"
+                  autoComplete="new-password"
+                  required
+                />
+              </div>
 
-        <div className="text-center mt-4 border-top pt-3">
-          <p className="small text-muted mb-0">
+              <div className="space-y-2">
+                <Label htmlFor="confirmPassword">Confirm Password</Label>
+                <Input
+                  id="confirmPassword"
+                  type="password"
+                  name="confirmPassword"
+                  value={formData.confirmPassword}
+                  onChange={handleChange}
+                  placeholder="••••••"
+                  autoComplete="new-password"
+                  required
+                />
+              </div>
+            </div>
+
+            <Button type="submit" className="w-full" disabled={loading}>
+              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              {loading ? "Creating account..." : "Create Account"}
+            </Button>
+          </form>
+
+          <div className="mt-6 text-center text-sm text-muted-foreground">
             Already have an account?{" "}
-            <Link to="/login" className="text-primary fw-bold text-decoration-none">
+            <Link to="/login" className="font-semibold text-blue-600 hover:text-blue-700">
               Sign in
             </Link>
-          </p>
-        </div>
-      </div>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

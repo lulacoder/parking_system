@@ -1,44 +1,44 @@
 import React, { useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import { auth } from "../firebase";
-import { useNavigate } from "react-router-dom";
-
+import { Button } from "../components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import { Input } from "../components/ui/input";
+import { Label } from "../components/ui/label";
 
 function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState(""); // ስህተቶችን ለተጠቃሚው ለማሳየት
   const navigate = useNavigate();
 
   const handleLogin = async (e) => {
     e.preventDefault();
     setLoading(true);
-    setErrorMsg(""); // የቀድሞ ስህተትን አጽዳ
 
     try {
       await Promise.race([
         auth.signInWithEmailAndPassword(email, password),
         new Promise((_, reject) => setTimeout(() => reject(new Error("LOGIN_TIMEOUT")), 10000)),
       ]);
-      // እዚህ ጋር Navigate ማድረግ አያስፈልግም፣ 
-      // ምክንያቱም App.js ላይ ያለው onAuthStateChanged በራሱ ይቀይረዋል።       
+      toast.success("Welcome back.");
     } catch (error) {
-      console.error(error.code);
-      // ስህተቶችን ወደ አማርኛ መቀየር
       if (error.message === "LOGIN_TIMEOUT") {
-        setErrorMsg("መግቢያው ተዘግይቷል። ኔትዎርክን/ Firebase ቅንብርን ያረጋግጡ እና ድጋሚ ይሞክሩ።");
+        toast.error("Login timed out. Please check network and retry.");
       } else if (error.code === "auth/wrong-password") {
-        setErrorMsg("የተሳሳተ የይለፍ ቃል ተጠቅመዋል።");
+        toast.error("Incorrect password.");
       } else if (error.code === "auth/user-not-found") {
-        setErrorMsg("በዚህ ኢሜይል የተመዘገበ አካውንት የለም።");
+        toast.error("No account found for this email.");
       } else if (error.code === "auth/invalid-credential") {
-        setErrorMsg("የመግቢያ መረጃዎቹ ትክክል አይደሉም።");
+        toast.error("Invalid credentials.");
       } else if (error.code === "auth/too-many-requests") {
-        setErrorMsg("ብዙ ጊዜ ተሞክሯል። እባክዎ ትንሽ ቆይተው ድጋሚ ይሞክሩ።");
+        toast.error("Too many attempts. Please wait and retry.");
       } else if (error.code === "auth/network-request-failed") {
-        setErrorMsg("ኔትዎርክ ችግር አለ። ኢንተርኔትዎን ያረጋግጡ።");
+        toast.error("Network error. Please check your connection.");
       } else {
-        setErrorMsg("ለመግባት ሲሞከር ስህተት ተፈጥሯል፤ እባክዎ እንደገና ይሞክሩ።");
+        toast.error("Login failed. Please try again.");
       }
     } finally {
       setLoading(false);
@@ -46,76 +46,62 @@ function Login() {
   };
 
   return (
-    <div className="container d-flex justify-content-center align-items-center vh-100 animate__animated animate__fadeIn">
-      <div className="card shadow-lg border-0 p-4 w-100" style={{ maxWidth: "400px", borderRadius: "25px", backgroundColor: "#ffffff" }}>
-        
-        <div className="text-center mb-4">
-          <div className="bg-primary text-white d-inline-block p-3 rounded-circle mb-3 shadow-sm" style={{ width: "80px", height: "80px" }}>
-            <h1 className="m-0" style={{ fontSize: "40px" }}>🚗</h1>
+    <div className="mx-auto flex min-h-[82vh] w-full max-w-md items-center">
+      <Card className="w-full animate-fade-in-up">
+        <CardHeader className="space-y-2 text-center">
+          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-500 to-blue-700 text-3xl text-white shadow-soft">
+            🚗
           </div>
-          <h2 className="fw-bold text-dark mb-0">ENDERASE</h2>
-          <p className="text-primary small fw-bold text-uppercase tracking-widest">Smart Parking System</p>
-        </div>
+          <CardTitle className="text-3xl">Welcome Back</CardTitle>
+          <CardDescription>Sign in to manage bookings and operations.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="email">Email</Label>
+              <Input
+                id="email"
+                type="email"
+                autoComplete="email"
+                value={email}
+                placeholder="example@mail.com"
+                onChange={(e) => setEmail(e.target.value)}
+                required
+              />
+            </div>
 
-        {/* ስህተት ካለ እዚህ ጋር ይታያል */}
-        {errorMsg && (
-          <div className="alert alert-danger py-2 small text-center rounded-3 animate__animated animate__shakeX">
-            {errorMsg}
+            <div className="space-y-2">
+              <Label htmlFor="password">Password</Label>
+              <Input
+                id="password"
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                placeholder="••••••••"
+                onChange={(e) => setPassword(e.target.value)}
+                required
+              />
+            </div>
+
+            <Button type="submit" className="w-full" disabled={loading}>
+              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              {loading ? "Signing in..." : "Sign In"}
+            </Button>
+          </form>
+
+          <div className="mt-6 text-center text-sm text-muted-foreground">
+            No account yet?{" "}
+            <button type="button" className="font-semibold text-blue-600 hover:text-blue-700" onClick={() => navigate("/signup")}>
+              Create one
+            </button>
           </div>
-        )}
-
-        <form onSubmit={handleLogin}>
-          <div className="mb-3">
-            <label className="form-label small fw-bold text-muted">ኢሜይል (Email)</label>
-            <input
-              type="email"
-              className="form-control form-control-lg border-0 bg-light"
-              placeholder="example@mail.com"
-              autoComplete="email"
-              required
-              style={{ borderRadius: "12px", fontSize: "16px" }}
-              onChange={(e) => setEmail(e.target.value)}
-            />
+          <div className="mt-2 text-center text-sm text-muted-foreground">
+            <Link to="/signup" className="font-semibold text-blue-600 hover:text-blue-700">
+              New driver signup
+            </Link>
           </div>
-
-          <div className="mb-4">
-            <label className="form-label small fw-bold text-muted">የይለፍ ቃል (Password)</label>
-            <input
-              type="password"
-              className="form-control form-control-lg border-0 bg-light"
-              placeholder="••••••••"
-              autoComplete="current-password"
-              required
-              style={{ borderRadius: "12px", fontSize: "16px" }}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-          </div>
-
-          <button
-            type="submit"
-            className="btn btn-primary btn-lg w-100 fw-bold shadow mb-3 d-flex align-items-center justify-content-center gap-2"
-            disabled={loading}
-            style={{ borderRadius: "12px", padding: "12px" }}
-          >
-            <span
-              className="spinner-border spinner-border-sm"
-              style={{ visibility: loading ? "visible" : "hidden" }}
-              aria-hidden={!loading}
-            ></span>
-            <span>{loading ? "በመግባት ላይ..." : "ግባ (Login)"}</span>
-          </button>
-        </form>
-
-        <div className="text-center mt-3">
-          <p className="small text-muted mb-1">አካውንት የለዎትም?</p>
-          <button 
-            className="btn btn-link text-primary fw-bold text-decoration-none p-0" 
-            onClick={() => navigate("/signup")}
-          >
-            አዲስ አካውንት ፍጠር
-          </button>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

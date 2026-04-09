@@ -1,4 +1,3 @@
-import "bootstrap/dist/css/bootstrap.min.css";
 import React, { useEffect, useMemo, useState } from "react";
 import { BrowserRouter as Router, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { Toaster } from "sonner";
@@ -102,21 +101,21 @@ function App() {
 
   if (loading) {
     return (
-      <div className="d-flex flex-column justify-content-center align-items-center vh-100 bg-dark text-white">
-        <div className="spinner-border text-primary mb-3" role="status" style={{ width: "3rem", height: "3rem" }}></div>
-        <h3 className="fw-bold text-uppercase">E N D E R A S E</h3>
-        <p className="text-secondary small mt-2">Loading authentication...</p>
+      <div className="flex min-h-screen flex-col items-center justify-center bg-slate-950 text-white">
+        <div className="h-12 w-12 animate-spin rounded-full border-4 border-blue-300 border-t-blue-600" role="status"></div>
+        <h3 className="mt-5 font-heading text-2xl font-bold uppercase tracking-[0.25em]">E N D E R A S E</h3>
+        <p className="mt-2 text-sm text-slate-400">Loading authentication...</p>
       </div>
     );
   }
 
   return (
     <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-      <div className="bg-dark min-vh-100 text-light overflow-hidden">
-        <Toaster theme="dark" richColors position="top-right" />
+      <div className="min-h-screen overflow-hidden bg-background text-foreground surface-grid">
+        <Toaster theme="light" richColors position="top-right" />
         {user && <Navbar userRole={userRole} userEmail={user?.email} />}
 
-        <div className="container-fluid p-0">
+        <div className="mx-auto w-full max-w-[1400px] px-4 pb-8 pt-6 md:px-6">
           <Routes>
             <Route path="/login" element={<LoginRoute user={user} role={userRole} />} />
             <Route path="/signup" element={user ? <Navigate to={roleHome} replace /> : <Signup />} />

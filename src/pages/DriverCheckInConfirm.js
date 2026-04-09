@@ -2,6 +2,11 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { firestore, functionsClient } from "../firebase";
+import { Badge } from "../components/ui/badge";
+import { Button } from "../components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import { Input } from "../components/ui/input";
+import { Label } from "../components/ui/label";
 
 function DriverCheckInConfirm() {
   const location = useLocation();
@@ -53,60 +58,60 @@ function DriverCheckInConfirm() {
   const renderStatus = () => {
     if (!requestStatus) return null;
     if (requestStatus === "pending") {
-      return <div className="alert alert-info mb-0">Waiting for operator approval...</div>;
+      return <Badge variant="warning">Waiting for operator approval...</Badge>;
     }
     if (requestStatus === "approved") {
       return (
-        <div className="alert alert-success mb-0">
-          Approved. Your parking session has started.
-          <button className="btn btn-link p-0 ms-2" onClick={() => navigate("/driver/home")}>
-            Go to Driver Home
-          </button>
+        <div className="space-y-2">
+          <Badge variant="success">Approved. Your parking session has started.</Badge>
+          <div>
+            <Button size="sm" onClick={() => navigate("/driver/home")}>Go to Driver Home</Button>
+          </div>
         </div>
       );
     }
     if (requestStatus === "rejected") {
-      return <div className="alert alert-warning mb-0">Request rejected by operator. Please re-scan a fresh QR.</div>;
+      return <Badge variant="destructive">Request rejected. Please re-scan a fresh QR.</Badge>;
     }
     if (requestStatus === "expired") {
-      return <div className="alert alert-warning mb-0">QR token expired. Ask operator to refresh QR.</div>;
+      return <Badge variant="warning">QR token expired. Ask operator to refresh QR.</Badge>;
     }
-    return <div className="alert alert-secondary mb-0">Current status: {requestStatus}</div>;
+    return <Badge variant="secondary">Current status: {requestStatus}</Badge>;
   };
 
   return (
-    <div className="container py-4">
-      <div className="card border-0 shadow-sm">
-        <div className="card-body">
-          <h3 className="fw-bold mb-2">Confirm Parking Check-In</h3>
-          <p className="text-muted mb-4">Scan operator QR, confirm your plate, then wait for operator approval.</p>
+    <div className="mx-auto w-full max-w-xl py-4">
+      <Card className="animate-fade-in-up">
+        <CardHeader>
+          <CardTitle>Confirm Parking Check-In</CardTitle>
+          <CardDescription>Scan operator QR, confirm your plate, then wait for operator approval.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {!token ? <div className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">Missing QR token. Please scan again.</div> : null}
 
-          {!token && <div className="alert alert-danger">Missing QR token. Please scan again.</div>}
-
-          <form onSubmit={confirmCheckIn} className="mb-3">
-            <div className="mb-3">
-              <label className="form-label">Plate Number</label>
-              <input
-                className="form-control"
+          <form onSubmit={confirmCheckIn} className="space-y-3">
+            <div className="space-y-2">
+              <Label>Plate Number</Label>
+              <Input
                 value={plateNumber}
                 onChange={(e) => setPlateNumber(e.target.value.toUpperCase())}
                 placeholder="AA 12345"
                 required
               />
             </div>
-            <button type="submit" className="btn btn-primary" disabled={loading || !token}>
+            <Button type="submit" disabled={loading || !token}>
               {loading ? "Confirming..." : "Confirm Check-In"}
-            </button>
+            </Button>
           </form>
 
           {requestPayload && (
-            <div className="small text-muted mb-2">
+            <div className="text-xs text-muted-foreground">
               Parking: {requestPayload.parkingId} | Request: {requestId}
             </div>
           )}
           {renderStatus()}
-        </div>
-      </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

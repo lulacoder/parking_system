@@ -3,6 +3,12 @@ import { Circle, GoogleMap, Marker, useJsApiLoader } from "@react-google-maps/ap
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { auth, firestore, functionsClient } from "../firebase";
+import { Badge } from "../components/ui/badge";
+import { Button } from "../components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import { Input } from "../components/ui/input";
+import { Label } from "../components/ui/label";
+import { Select } from "../components/ui/select";
 
 const SEEDED_IDS = ["lot_01", "lot_02"];
 
@@ -133,12 +139,7 @@ function DriverHome() {
       radius: 1000,
     });
     const bounds = radiusCircle.getBounds();
-    if (bounds) {
-      map.fitBounds(bounds, 24);
-    } else {
-      map.panTo(selected);
-      map.setZoom(14);
-    }
+    if (bounds) map.fitBounds(bounds, 22);
   }, [selectedParking]);
 
   const reserveSlot = async (e) => {
@@ -182,7 +183,6 @@ function DriverHome() {
       return;
     }
 
-    // Accept either full URL from QR or raw token value for desktop testing.
     try {
       const parsed = new URL(trimmed);
       const token = parsed.searchParams.get("token");
@@ -191,63 +191,68 @@ function DriverHome() {
         return;
       }
     } catch (_) {
-      // Not a URL; treat as raw token.
+      // no-op
     }
     navigate(`/driver/checkin-confirm?token=${encodeURIComponent(trimmed)}`);
   };
 
   return (
-    <div className="container py-4">
-      <div className="card border-0 shadow-sm mb-4">
-        <div className="card-body">
-          <h5 className="fw-bold mb-2">QR Check-In</h5>
-          <p className="text-muted mb-3">
-            Scan operator QR with your phone camera, or paste token/link below for desktop testing.
-          </p>
-          <div className="d-flex flex-column flex-md-row gap-2">
-            <input
-              className="form-control"
-              placeholder="Paste QR link or token (optional)"
-              value={qrTokenInput}
-              onChange={(e) => setQrTokenInput(e.target.value)}
-            />
-            <button type="button" className="btn btn-primary" onClick={goToQrConfirm}>
-              Open QR Check-In
-            </button>
-          </div>
-        </div>
-      </div>
+    <div className="space-y-6">
+      <Card className="animate-fade-in-up">
+        <CardHeader>
+          <CardTitle>QR Check-In</CardTitle>
+          <CardDescription>Scan operator QR with your phone camera, or paste token/link for desktop testing.</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-2 sm:flex-row">
+          <Input
+            placeholder="Paste QR link or token (optional)"
+            value={qrTokenInput}
+            onChange={(e) => setQrTokenInput(e.target.value)}
+          />
+          <Button type="button" onClick={goToQrConfirm}>
+            Open QR Check-In
+          </Button>
+        </CardContent>
+      </Card>
 
-      <div className="card border-0 shadow-sm mb-4">
-        <div className="card-body">
-          <h3 className="fw-bold mb-2">Driver Booking</h3>
-          <p className="text-muted mb-0">Reserve a parking slot through secure Cloud Functions.</p>
-        </div>
-      </div>
+      <Card className="animate-fade-in-up">
+        <CardHeader>
+          <CardTitle>Driver Booking</CardTitle>
+          <CardDescription>Reserve a parking slot through secure Cloud Functions.</CardDescription>
+        </CardHeader>
+      </Card>
 
-      <div className="card border-0 shadow-sm mb-4">
-        <div className="card-body">
-          <h5 className="fw-bold mb-3">Choose Parking on Map</h5>
-          <div className="d-flex flex-wrap gap-2 mb-3">
+      <Card className="animate-fade-in-up">
+        <CardHeader>
+          <CardTitle>Choose Parking on Map</CardTitle>
+          <CardDescription>Click a top card or map marker to select a parking location.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="mb-4 flex flex-wrap gap-2">
             {parkings.map((parking) => (
               <button
                 key={parking.id}
                 type="button"
-                className={`btn btn-sm ${parking.id === selectedParkingId ? "btn-primary" : "btn-outline-light text-dark"}`}
+                className={`rounded-lg border px-3 py-2 text-left text-sm transition-all ${
+                  parking.id === selectedParkingId
+                    ? "border-blue-500 bg-blue-50 text-blue-700"
+                    : "border-border bg-white hover:border-blue-300 hover:bg-blue-50"
+                }`}
                 onClick={() => setSelectedParkingId(parking.id)}
               >
-                {parking.name} - {parking.availableSlots ?? 0} open
+                <div className="font-medium">{parking.name}</div>
+                <div className="text-xs text-slate-500">{parking.availableSlots ?? 0} available • {parking.hourlyRate || 50} ETB/hr</div>
               </button>
             ))}
           </div>
 
           {!mapsApiKey ? (
-            <div className="alert alert-warning mb-0">Google Maps API key is missing in `.env`.</div>
+            <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-700">Google Maps API key is missing in `.env`.</div>
           ) : loadError ? (
-            <div className="alert alert-danger mb-0">Failed to load Google Maps. Check key restrictions/billing.</div>
+            <div className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">Failed to load Google Maps. Check key restrictions/billing.</div>
           ) : isLoaded ? (
             <GoogleMap
-              mapContainerStyle={{ width: "100%", height: "360px", borderRadius: "12px" }}
+              mapContainerStyle={{ width: "100%", height: "380px", borderRadius: "12px" }}
               center={mapCenter}
               zoom={13}
               onLoad={(map) => {
@@ -260,10 +265,10 @@ function DriverHome() {
                   center={parkingCoords(selectedParking)}
                   radius={1000}
                   options={{
-                    strokeColor: "#0d6efd",
+                    strokeColor: "#2563eb",
                     strokeOpacity: 0.9,
                     strokeWeight: 2,
-                    fillColor: "#0d6efd",
+                    fillColor: "#2563eb",
                     fillOpacity: 0.12,
                   }}
                 />
@@ -274,11 +279,6 @@ function DriverHome() {
                   position={coords}
                   title={parking.name}
                   onClick={() => setSelectedParkingId(parking.id)}
-                  label={{
-                    text: parking.id === selectedParkingId ? "Selected" : `${parking.availableSlots ?? 0}`,
-                    color: "#ffffff",
-                    fontWeight: "bold",
-                  }}
                   icon={{
                     url:
                       parking.id === selectedParkingId
@@ -289,119 +289,114 @@ function DriverHome() {
               ))}
             </GoogleMap>
           ) : (
-            <div className="d-flex align-items-center gap-2">
-              <div className="spinner-border spinner-border-sm text-primary" role="status"></div>
-              <span>Loading map...</span>
-            </div>
+            <div className="text-sm text-slate-500">Loading map...</div>
           )}
-          <div className="small text-muted mt-2">
-            Tip: click a marker to auto-select a parking location for reservation.
-          </div>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
-      <div className="row g-4">
-        <div className="col-lg-6">
-          <div className="card border-0 shadow-sm">
-            <div className="card-body">
-              <h5 className="fw-bold mb-3">Reserve Slot</h5>
-              <form onSubmit={reserveSlot}>
-                <div className="mb-3">
-                  <label className="form-label">Parking</label>
-                  <select
-                    className="form-select"
-                    value={selectedParkingId}
-                    onChange={(e) => setSelectedParkingId(e.target.value)}
-                    required
-                  >
-                    {parkings.map((parking) => (
-                      <option key={parking.id} value={parking.id}>
-                        {parking.name} - {parking.availableSlots ?? 0} available
-                      </option>
-                    ))}
-                  </select>
-                </div>
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card className="animate-fade-in-up">
+          <CardHeader>
+            <CardTitle>Reserve Slot</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={reserveSlot} className="space-y-4">
+              <div className="space-y-2">
+                <Label>Parking</Label>
+                <Select value={selectedParkingId} onChange={(e) => setSelectedParkingId(e.target.value)} required>
+                  {parkings.map((parking) => (
+                    <option key={parking.id} value={parking.id}>
+                      {parking.name} - {parking.availableSlots ?? 0} available
+                    </option>
+                  ))}
+                </Select>
+              </div>
 
-                <div className="mb-3">
-                  <label className="form-label">Plate Number</label>
-                  <input
-                    className="form-control"
-                    value={plateNumber}
-                    onChange={(e) => setPlateNumber(e.target.value.toUpperCase())}
-                    placeholder="AA 12345"
-                    required
-                  />
-                </div>
+              <div className="space-y-2">
+                <Label>Plate Number</Label>
+                <Input
+                  value={plateNumber}
+                  onChange={(e) => setPlateNumber(e.target.value.toUpperCase())}
+                  placeholder="AA 12345"
+                  required
+                />
+              </div>
 
-                <button className="btn btn-primary" disabled={loading || !selectedParkingId}>
-                  {loading ? "Reserving..." : "Reserve"}
-                </button>
-              </form>
-            </div>
-          </div>
-        </div>
+              <Button disabled={loading || !selectedParkingId}>{loading ? "Reserving..." : "Reserve"}</Button>
+            </form>
+          </CardContent>
+        </Card>
 
-        <div className="col-lg-6">
-          <div className="card border-0 shadow-sm mb-3">
-            <div className="card-body">
-              <h5 className="fw-bold mb-2">Selected Parking</h5>
+        <div className="space-y-6">
+          <Card className="animate-fade-in-up">
+            <CardHeader>
+              <CardTitle>Selected Parking</CardTitle>
+            </CardHeader>
+            <CardContent>
               {selectedParking ? (
-                <>
-                  <div className="small text-muted">{selectedParking.address || "No address"}</div>
-                  <div className="mt-2">Rate: {selectedParking.hourlyRate || 50} ETB / hour</div>
-                  <div>Capacity: {selectedParking.slotCapacity || 0}</div>
-                  <div>Available: {selectedParking.availableSlots || 0}</div>
-                </>
+                <div className="space-y-2 text-sm">
+                  <div className="text-muted-foreground">{selectedParking.address || "No address"}</div>
+                  <div className="flex gap-2">
+                    <Badge>Rate: {selectedParking.hourlyRate || 50} ETB/hr</Badge>
+                    <Badge variant="secondary">Capacity: {selectedParking.slotCapacity || 0}</Badge>
+                  </div>
+                  <div className="font-medium text-slate-700">Available: {selectedParking.availableSlots || 0}</div>
+                </div>
               ) : (
-                <div className="text-muted">No active parking found.</div>
+                <div className="text-sm text-muted-foreground">No active parking found.</div>
               )}
-            </div>
-          </div>
+            </CardContent>
+          </Card>
 
-          <div className="card border-0 shadow-sm">
-            <div className="card-body">
-              <h5 className="fw-bold mb-3">My Active Bookings</h5>
+          <Card className="animate-fade-in-up">
+            <CardHeader>
+              <CardTitle>My Active Bookings</CardTitle>
+            </CardHeader>
+            <CardContent>
               {!activeBookings.length ? (
-                <div className="text-muted">No active bookings.</div>
+                <div className="text-sm text-muted-foreground">No active bookings.</div>
               ) : (
-                <div className="list-group">
+                <div className="space-y-2">
                   {activeBookings.map((booking) => (
-                    <div key={booking.id} className="list-group-item">
-                      <div className="fw-bold">{booking.plateNumber}</div>
-                      <div className="small text-muted">Status: {booking.status}</div>
-                      <div className="small text-muted">Expires: {formatDate(booking.expiresAt)}</div>
+                    <div key={booking.id} className="rounded-lg border border-border bg-white p-3">
+                      <div className="font-medium">{booking.plateNumber}</div>
+                      <div className="text-sm text-muted-foreground">Status: {booking.status}</div>
+                      <div className="text-xs text-muted-foreground">Expires: {formatDate(booking.expiresAt)}</div>
                     </div>
                   ))}
                 </div>
               )}
-            </div>
-          </div>
+            </CardContent>
+          </Card>
 
-          <div className="card border-0 shadow-sm mt-3">
-            <div className="card-body">
-              <h5 className="fw-bold mb-3">My Active Sessions</h5>
+          <Card className="animate-fade-in-up">
+            <CardHeader>
+              <CardTitle>My Active Sessions</CardTitle>
+            </CardHeader>
+            <CardContent>
               {!activeSessions.length ? (
-                <div className="text-muted">No active sessions.</div>
+                <div className="text-sm text-muted-foreground">No active sessions.</div>
               ) : (
-                <div className="list-group">
+                <div className="space-y-2">
                   {activeSessions.map((session) => (
-                    <div key={session.id} className="list-group-item">
-                      <div className="fw-bold">{session.plateNumber}</div>
-                      <div className="small text-muted mb-2">Parking: {session.parkingId}</div>
-                      <button
+                    <div key={session.id} className="rounded-lg border border-border bg-white p-3">
+                      <div className="font-medium">{session.plateNumber}</div>
+                      <div className="mb-2 text-xs text-muted-foreground">Parking: {session.parkingId}</div>
+                      <Button
                         type="button"
-                        className="btn btn-sm btn-warning"
+                        size="sm"
+                        variant="secondary"
                         disabled={checkoutLoadingId === session.id}
                         onClick={() => driverCheckout(session)}
                       >
                         {checkoutLoadingId === session.id ? "Checking out..." : "Check Out"}
-                      </button>
+                      </Button>
                     </div>
                   ))}
                 </div>
               )}
-            </div>
-          </div>
+            </CardContent>
+          </Card>
         </div>
       </div>
     </div>

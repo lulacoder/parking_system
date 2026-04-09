@@ -98,6 +98,16 @@ service cloud.firestore {
 
     match /payments/{paymentId} {
       allow read: if isAdmin()
+        || (isDriver() && resource.data.driverId == request.auth.uid)
+        || (isOwner() && resource.data.ownerId == ownerIdOfUser())
+        || parkingOwnedByCaller(resource.data.parkingId)
+        || isAssignedOperator(resource.data.parkingId);
+      allow write: if false;
+    }
+
+    match /paymentRequests/{requestId} {
+      allow read: if isAdmin()
+        || (isDriver() && resource.data.driverId == request.auth.uid)
         || (isOwner() && resource.data.ownerId == ownerIdOfUser())
         || parkingOwnedByCaller(resource.data.parkingId)
         || isAssignedOperator(resource.data.parkingId);

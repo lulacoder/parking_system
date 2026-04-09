@@ -195,6 +195,216 @@ async function completeCheckout({ actorUid, actorRole, parkingId, plateNumber, p
   return result;
 }
 
+function normalizePaymentMethod(value) {
+  const method = String(value || "").trim().toLowerCase();
+  if (!["bank", "phone"].includes(method)) {
+    throw new HttpsError("invalid-argument", "method must be either bank or phone.");
+  }
+  return method;
+}
+
+function computeSessionCharge(entryTimestamp, now) {
+  const entryMs = parseTimestampMs(entryTimestamp);
+  if (!entryMs) {
+    throw new HttpsError("failed-precondition", "Session entry time is invalid.");
+  }
+  const durationMinutes = Math.max(1, Math.ceil((now - entryMs) / 60000));
+  const billedHours = Math.max(1, Math.ceil(durationMinutes / 60));
+  const amountDue = billedHours * FLAT_HOURLY_RATE;
+  return { durationMinutes, billedHours, amountDue };
+}
+
+async function submitManualPaymentRequest({ actorUid, parkingId, plateNumber, method, referenceCode }) {
+  const now = nowMs();
+  const sessionQuery = await db
+    .collection("sessions")
+    .where("parkingId", "==", parkingId)
+    .where("plateNumber", "==", plateNumber)
+    .where("status", "==", "active")
+    .limit(1)
+    .get();
+  if (sessionQuery.empty) {
+    throw new HttpsError("not-found", "No active session found for this vehicle.");
+  }
+
+  const sessionRef = sessionQuery.docs[0].ref;
+  const normalizedReference = String(referenceCode || "").trim();
+  let responseData = null;
+
+  await db.runTransaction(async (tx) => {
+    const sessionSnap = await tx.get(sessionRef);
+    if (!sessionSnap.exists) throw new HttpsError("not-found", "Session not found.");
+    const session = sessionSnap.data();
+
+    if (session.status !== "active") {
+      throw new HttpsError("failed-precondition", "Session is not active.");
+    }
+    if (session.driverId !== actorUid) {
+      throw new HttpsError("permission-denied", "Drivers can only submit payment for their own session.");
+    }
+
+    const charge = computeSessionCharge(session.entryTime, now);
+    const ownerId = session.ownerId || null;
+
+    const existingPendingQuery = db
+      .collection("paymentRequests")
+      .where("sessionId", "==", sessionRef.id)
+      .where("status", "==", "pending")
+      .limit(1);
+    const existingPendingSnap = await tx.get(existingPendingQuery);
+    if (!existingPendingSnap.empty) {
+      throw new HttpsError("failed-precondition", "A payment request is already pending operator approval.");
+    }
+
+    const paymentRequestRef = db.collection("paymentRequests").doc();
+
+    tx.set(
+      paymentRequestRef,
+      {
+        sessionId: sessionRef.id,
+        bookingId: session.bookingId || null,
+        parkingId: session.parkingId,
+        ownerId,
+        driverId: actorUid,
+        plateNumber: session.plateNumber,
+        amountDue: charge.amountDue,
+        billedHours: charge.billedHours,
+        hourlyRate: FLAT_HOURLY_RATE,
+        method,
+        referenceCode: normalizedReference || null,
+        status: "pending",
+        submittedAt: ts(now),
+        submittedBy: actorUid,
+        confirmedAt: null,
+        rejectedAt: null,
+        confirmedBy: null,
+        rejectedBy: null,
+        rejectionReason: null,
+        paymentId: null,
+        createdAt: ts(now),
+        updatedAt: ts(now),
+      },
+      { merge: false }
+    );
+
+    tx.update(sessionRef, {
+      paymentStatus: "pending",
+      updatedAt: ts(now),
+    });
+
+    responseData = {
+      requestId: paymentRequestRef.id,
+      sessionId: sessionRef.id,
+      status: "pending",
+      parkingId: session.parkingId,
+      amountDue: charge.amountDue,
+      feeAmount: charge.amountDue,
+      billedHours: charge.billedHours,
+      hourlyRate: FLAT_HOURLY_RATE,
+    };
+  });
+
+  return responseData;
+}
+
+exports.listPendingPaymentsForOperator = onCall(CALLABLE_OPTIONS, async (request) => {
+  const actorUid = request.auth?.uid;
+  await requireRole(request, "operator");
+
+  const parkingId = String(request.data?.parkingId || "").trim();
+  if (!parkingId) throw new HttpsError("invalid-argument", "parkingId is required.");
+  await assertOperatorAssigned(actorUid, parkingId);
+
+  const snapshot = await db.collection("paymentRequests").where("parkingId", "==", parkingId).limit(200).get();
+  const pending = snapshot.docs
+    .map((doc) => ({ id: doc.id, ...doc.data() }))
+    .filter((item) => item.status === "pending")
+    .sort((a, b) => parseTimestampMs(b.submittedAt) - parseTimestampMs(a.submittedAt))
+    .map((item) => ({
+      id: item.id,
+      sessionId: item.sessionId || null,
+      bookingId: item.bookingId || null,
+      parkingId: item.parkingId || null,
+      driverId: item.driverId || null,
+      plateNumber: item.plateNumber || null,
+      amountDue: toNumber(item.amountDue, 0),
+      billedHours: toNumber(item.billedHours, 0),
+      hourlyRate: toNumber(item.hourlyRate, FLAT_HOURLY_RATE),
+      method: item.method || null,
+      referenceCode: item.referenceCode || null,
+      submittedAtMs: parseTimestampMs(item.submittedAt),
+    }));
+
+  return { parkingId, pendingPayments: pending };
+});
+
+exports.listPendingPaymentsForDriver = onCall(CALLABLE_OPTIONS, async (request) => {
+  const actorUid = request.auth?.uid;
+  await requireRole(request, "driver");
+
+  const snapshot = await db.collection("paymentRequests").where("driverId", "==", actorUid).limit(200).get();
+  const pending = snapshot.docs
+    .map((doc) => ({ id: doc.id, ...doc.data() }))
+    .filter((item) => item.status === "pending")
+    .sort((a, b) => parseTimestampMs(b.submittedAt) - parseTimestampMs(a.submittedAt))
+    .map((item) => ({
+      id: item.id,
+      sessionId: item.sessionId || null,
+      parkingId: item.parkingId || null,
+      plateNumber: item.plateNumber || null,
+      amountDue: toNumber(item.amountDue, 0),
+      method: item.method || null,
+      submittedAtMs: parseTimestampMs(item.submittedAt),
+    }));
+
+  return { pendingPayments: pending };
+});
+
+exports.getPendingPaymentForSession = onCall(CALLABLE_OPTIONS, async (request) => {
+  const actorUid = request.auth?.uid;
+  await requireRole(request, "operator");
+
+  const sessionId = String(request.data?.sessionId || "").trim();
+  if (!sessionId) throw new HttpsError("invalid-argument", "sessionId is required.");
+
+  const sessionSnap = await db.collection("sessions").doc(sessionId).get();
+  if (!sessionSnap.exists) throw new HttpsError("not-found", "Session not found.");
+  const session = sessionSnap.data();
+  const parkingId = String(session.parkingId || "").trim();
+  if (!parkingId) throw new HttpsError("failed-precondition", "Session parkingId is missing.");
+  await assertOperatorAssigned(actorUid, parkingId);
+
+  const snapshot = await db
+    .collection("paymentRequests")
+    .where("sessionId", "==", sessionId)
+    .where("status", "==", "pending")
+    .limit(1)
+    .get();
+
+  if (snapshot.empty) {
+    throw new HttpsError("not-found", "No pending payment request found for this session.");
+  }
+
+  const doc = snapshot.docs[0];
+  const payload = doc.data();
+  return {
+    pendingPayment: {
+      id: doc.id,
+      sessionId: payload.sessionId || sessionId,
+      bookingId: payload.bookingId || null,
+      parkingId: payload.parkingId || parkingId,
+      driverId: payload.driverId || null,
+      plateNumber: payload.plateNumber || session.plateNumber || null,
+      amountDue: toNumber(payload.amountDue, 0),
+      billedHours: toNumber(payload.billedHours, 0),
+      hourlyRate: toNumber(payload.hourlyRate, FLAT_HOURLY_RATE),
+      method: payload.method || null,
+      referenceCode: payload.referenceCode || null,
+      submittedAtMs: parseTimestampMs(payload.submittedAt),
+    },
+  };
+});
+
 exports.createBooking = onCall(CALLABLE_OPTIONS, async (request) => {
   const actorUid = request.auth?.uid;
   const profile = await requireRole(request, "driver");
@@ -379,7 +589,7 @@ exports.checkInVehicle = onCall(CALLABLE_OPTIONS, async (request) => {
       billedHours: null,
       hourlyRate: FLAT_HOURLY_RATE,
       feeAmount: null,
-      paymentStatus: "pending",
+      paymentStatus: "unpaid",
       status: "active",
       checkedInBy: actorUid,
       checkedOutBy: null,
@@ -393,27 +603,39 @@ exports.checkInVehicle = onCall(CALLABLE_OPTIONS, async (request) => {
 });
 
 exports.checkOutVehicle = onCall(CALLABLE_OPTIONS, async (request) => {
-  const actorUid = request.auth?.uid;
   await requireRole(request, "operator");
+  throw new HttpsError(
+    "failed-precondition",
+    "Direct operator checkout is disabled. Please confirm payment from the Pending Payments queue."
+  );
+});
+
+exports.submitManualPayment = onCall(CALLABLE_OPTIONS, async (request) => {
+  const actorUid = request.auth?.uid;
+  await requireRole(request, "driver");
 
   const parkingId = String(request.data?.parkingId || "").trim();
   const plateNumber = normalizePlate(request.data?.plateNumber);
-  if (!parkingId || !plateNumber) throw new HttpsError("invalid-argument", "parkingId and plateNumber are required.");
+  const method = normalizePaymentMethod(request.data?.method || "bank");
+  const referenceCode = String(request.data?.referenceCode || "").trim();
 
-  await assertOperatorAssigned(actorUid, parkingId);
-  const result = await completeCheckout({
+  if (!parkingId || !plateNumber) {
+    throw new HttpsError("invalid-argument", "parkingId and plateNumber are required.");
+  }
+
+  const result = await submitManualPaymentRequest({
     actorUid,
-    actorRole: "operator",
     parkingId,
     plateNumber,
-    paymentMethod: request.data?.paymentMethod || "manual",
+    method,
+    referenceCode,
   });
 
-  await writeAuditLog("CHECK_OUT_VEHICLE", actorUid, parkingId, {
-    plateNumber,
+  await writeAuditLog("SUBMIT_MANUAL_PAYMENT", actorUid, parkingId, {
+    requestId: result.requestId,
     sessionId: result.sessionId,
-    paymentId: result.paymentId,
-    feeAmount: result.feeAmount,
+    method,
+    amountDue: result.amountDue,
   });
   return result;
 });
@@ -424,23 +646,221 @@ exports.driverCheckOutVehicle = onCall(CALLABLE_OPTIONS, async (request) => {
 
   const parkingId = String(request.data?.parkingId || "").trim();
   const plateNumber = normalizePlate(request.data?.plateNumber);
+  const method = normalizePaymentMethod(request.data?.method || "bank");
+  const referenceCode = String(request.data?.referenceCode || "").trim();
   if (!parkingId || !plateNumber) throw new HttpsError("invalid-argument", "parkingId and plateNumber are required.");
 
-  const result = await completeCheckout({
+  const result = await submitManualPaymentRequest({
     actorUid,
-    actorRole: "driver",
     parkingId,
     plateNumber,
-    paymentMethod: "driver_self_checkout",
+    method,
+    referenceCode,
   });
 
-  await writeAuditLog("DRIVER_CHECK_OUT_VEHICLE", actorUid, parkingId, {
-    plateNumber,
+  await writeAuditLog("DRIVER_SUBMIT_MANUAL_PAYMENT", actorUid, parkingId, {
+    requestId: result.requestId,
     sessionId: result.sessionId,
-    paymentId: result.paymentId,
-    feeAmount: result.feeAmount,
+    method,
+    amountDue: result.amountDue,
   });
   return result;
+});
+
+exports.confirmManualPayment = onCall(CALLABLE_OPTIONS, async (request) => {
+  const actorUid = request.auth?.uid;
+  await requireRole(request, "operator");
+
+  const requestId = String(request.data?.requestId || "").trim();
+  if (!requestId) throw new HttpsError("invalid-argument", "requestId is required.");
+
+  const paymentRequestRef = db.collection("paymentRequests").doc(requestId);
+  const now = nowMs();
+  let responseData = null;
+
+  const preSnap = await paymentRequestRef.get();
+  if (!preSnap.exists) throw new HttpsError("not-found", "Payment request not found.");
+  await assertOperatorAssigned(actorUid, preSnap.data().parkingId);
+
+  await db.runTransaction(async (tx) => {
+    const reqSnap = await tx.get(paymentRequestRef);
+    if (!reqSnap.exists) throw new HttpsError("not-found", "Payment request not found.");
+    const paymentRequest = reqSnap.data();
+
+    if (paymentRequest.status === "confirmed") {
+      responseData = {
+        requestId,
+        sessionId: paymentRequest.sessionId,
+        paymentId: paymentRequest.paymentId || requestId,
+        status: "confirmed",
+        amountDue: paymentRequest.amountDue,
+        alreadyConfirmed: true,
+      };
+      return;
+    }
+    if (paymentRequest.status !== "pending") {
+      throw new HttpsError("failed-precondition", "Only pending payment requests can be confirmed.");
+    }
+
+    const sessionRef = db.collection("sessions").doc(paymentRequest.sessionId);
+    const parkingRef = db.collection("parkings").doc(paymentRequest.parkingId);
+    const bookingRef = paymentRequest.bookingId ? db.collection("bookings").doc(paymentRequest.bookingId) : null;
+    const paymentRef = db.collection("payments").doc(requestId);
+
+    const [sessionSnap, parkingSnap] = await Promise.all([tx.get(sessionRef), tx.get(parkingRef)]);
+    if (!sessionSnap.exists) throw new HttpsError("not-found", "Session not found.");
+    if (!parkingSnap.exists) throw new HttpsError("not-found", "Parking not found.");
+
+    const session = sessionSnap.data();
+    if (session.status !== "active") {
+      throw new HttpsError("failed-precondition", "Session is already closed.");
+    }
+
+    const charge = computeSessionCharge(session.entryTime, now);
+    const feeAmount = charge.amountDue;
+    const platformCommission = Math.round(feeAmount * PLATFORM_COMMISSION_RATE * 100) / 100;
+    const ownerAmount = Math.round((feeAmount - platformCommission) * 100) / 100;
+
+    tx.update(sessionRef, {
+      status: "completed",
+      exitTime: ts(now),
+      durationMinutes: charge.durationMinutes,
+      billedHours: charge.billedHours,
+      hourlyRate: FLAT_HOURLY_RATE,
+      feeAmount,
+      paymentStatus: "confirmed",
+      checkedOutBy: actorUid,
+      checkedOutByRole: "operator",
+      updatedAt: ts(now),
+    });
+
+    tx.update(parkingRef, {
+      occupiedSlots: FieldValue.increment(-1),
+      availableSlots: FieldValue.increment(1),
+      updatedAt: ts(now),
+    });
+
+    if (bookingRef) {
+      tx.set(
+        bookingRef,
+        {
+          status: "completed",
+          checkOutAt: ts(now),
+          updatedAt: ts(now),
+        },
+        { merge: true }
+      );
+    }
+
+    tx.set(
+      paymentRef,
+      {
+        sessionId: sessionRef.id,
+        bookingId: paymentRequest.bookingId || null,
+        parkingId: paymentRequest.parkingId,
+        ownerId: paymentRequest.ownerId || null,
+        driverId: paymentRequest.driverId || null,
+        grossAmount: feeAmount,
+        platformCommission,
+        ownerAmount,
+        method: paymentRequest.method || "manual",
+        status: "confirmed",
+        paidAt: ts(now),
+        confirmedBy: actorUid,
+        createdAt: ts(now),
+        updatedAt: ts(now),
+      },
+      { merge: true }
+    );
+
+    tx.update(paymentRequestRef, {
+      status: "confirmed",
+      amountDue: feeAmount,
+      billedHours: charge.billedHours,
+      hourlyRate: FLAT_HOURLY_RATE,
+      confirmedAt: ts(now),
+      confirmedBy: actorUid,
+      rejectionReason: null,
+      rejectedAt: null,
+      rejectedBy: null,
+      paymentId: paymentRef.id,
+      updatedAt: ts(now),
+    });
+
+    responseData = {
+      requestId,
+      sessionId: sessionRef.id,
+      paymentId: paymentRef.id,
+      status: "confirmed",
+      feeAmount,
+      billedHours: charge.billedHours,
+    };
+  });
+
+  await writeAuditLog("CONFIRM_MANUAL_PAYMENT", actorUid, preSnap.data().parkingId, {
+    requestId,
+    sessionId: responseData?.sessionId || null,
+    paymentId: responseData?.paymentId || null,
+    feeAmount: responseData?.feeAmount || null,
+  });
+
+  return responseData;
+});
+
+exports.rejectManualPayment = onCall(CALLABLE_OPTIONS, async (request) => {
+  const actorUid = request.auth?.uid;
+  await requireRole(request, "operator");
+
+  const requestId = String(request.data?.requestId || "").trim();
+  const reason = String(request.data?.reason || "Payment not verified").trim();
+  if (!requestId) throw new HttpsError("invalid-argument", "requestId is required.");
+
+  const paymentRequestRef = db.collection("paymentRequests").doc(requestId);
+  const now = nowMs();
+  let responseData = null;
+
+  const preSnap = await paymentRequestRef.get();
+  if (!preSnap.exists) throw new HttpsError("not-found", "Payment request not found.");
+  await assertOperatorAssigned(actorUid, preSnap.data().parkingId);
+
+  await db.runTransaction(async (tx) => {
+    const reqSnap = await tx.get(paymentRequestRef);
+    if (!reqSnap.exists) throw new HttpsError("not-found", "Payment request not found.");
+    const paymentRequest = reqSnap.data();
+
+    if (paymentRequest.status === "rejected") {
+      responseData = { requestId, status: "rejected", alreadyRejected: true };
+      return;
+    }
+    if (paymentRequest.status !== "pending") {
+      throw new HttpsError("failed-precondition", "Only pending payment requests can be rejected.");
+    }
+
+    const sessionRef = db.collection("sessions").doc(paymentRequest.sessionId);
+    tx.update(paymentRequestRef, {
+      status: "rejected",
+      rejectionReason: reason,
+      rejectedBy: actorUid,
+      rejectedAt: ts(now),
+      updatedAt: ts(now),
+    });
+    tx.set(
+      sessionRef,
+      {
+        paymentStatus: "unpaid",
+        updatedAt: ts(now),
+      },
+      { merge: true }
+    );
+
+    responseData = { requestId, status: "rejected" };
+  });
+
+  await writeAuditLog("REJECT_MANUAL_PAYMENT", actorUid, preSnap.data().parkingId, {
+    requestId,
+    reason,
+  });
+  return responseData;
 });
 
 exports.createOwnerAccount = onCall(CALLABLE_OPTIONS, async (request) => {
@@ -756,7 +1176,7 @@ exports.approveCheckInRequest = onCall(CALLABLE_OPTIONS, async (request) => {
       billedHours: null,
       hourlyRate: FLAT_HOURLY_RATE,
       feeAmount: null,
-      paymentStatus: "pending",
+      paymentStatus: "unpaid",
       status: "active",
       checkedInBy: actorUid,
       checkedOutBy: null,
@@ -1119,4 +1539,94 @@ exports.ownerSetOperatorStatus = onCall(CALLABLE_OPTIONS, async (request) => {
 
   await writeAuditLog("OWNER_SET_OPERATOR_STATUS", actorUid, null, { operatorUid, ownerId, status });
   return { operatorUid, status };
+});
+
+exports.ownerUpdatePaymentDetails = onCall(CALLABLE_OPTIONS, async (request) => {
+  const actorUid = request.auth?.uid;
+  const ownerProfile = await requireRole(request, "owner");
+  const ownerId = String(ownerProfile.ownerId || "").trim();
+  if (!ownerId) throw new HttpsError("failed-precondition", "Owner profile is missing ownerId.");
+
+  const phone = String(request.data?.phone || "").trim();
+  const bankAccountNumber = String(request.data?.bankAccountNumber || "").trim();
+  if (!phone && !bankAccountNumber) {
+    throw new HttpsError("invalid-argument", "At least one of phone or bankAccountNumber is required.");
+  }
+
+  const ownerRef = db.collection("owners").doc(ownerId);
+  const userRef = db.collection("users").doc(actorUid);
+  const now = nowMs();
+
+  await db.runTransaction(async (tx) => {
+    const ownerSnap = await tx.get(ownerRef);
+    if (!ownerSnap.exists) throw new HttpsError("not-found", "Owner profile document not found.");
+
+    const updatePayload = {
+      updatedAt: ts(now),
+    };
+    if (request.data?.phone !== undefined) updatePayload.phone = phone;
+    if (request.data?.bankAccountNumber !== undefined) updatePayload.bankAccountNumber = bankAccountNumber;
+
+    tx.set(ownerRef, updatePayload, { merge: true });
+    if (request.data?.phone !== undefined) {
+      tx.set(userRef, { phone, updatedAt: Date.now() }, { merge: true });
+    }
+  });
+
+  await writeAuditLog("OWNER_UPDATE_PAYMENT_DETAILS", actorUid, null, {
+    ownerId,
+    updatedPhone: request.data?.phone !== undefined,
+    updatedBankAccountNumber: request.data?.bankAccountNumber !== undefined,
+  });
+
+  return {
+    ownerId,
+    phone: request.data?.phone !== undefined ? phone : null,
+    bankAccountNumber: request.data?.bankAccountNumber !== undefined ? bankAccountNumber : null,
+    updatedAtMs: now,
+  };
+});
+
+exports.getParkingPaymentDetails = onCall(CALLABLE_OPTIONS, async (request) => {
+  if (!request.auth?.uid) {
+    throw new HttpsError("unauthenticated", "Authentication required.");
+  }
+
+  const parkingId = String(request.data?.parkingId || "").trim();
+  if (!parkingId) {
+    throw new HttpsError("invalid-argument", "parkingId is required.");
+  }
+
+  const profile = await getUserProfile(request.auth.uid);
+  if (!profile) {
+    throw new HttpsError("failed-precondition", "User profile not found.");
+  }
+  if (profile.status && profile.status !== "active") {
+    throw new HttpsError("permission-denied", "User is not active.");
+  }
+
+  const allowedRoles = ["driver", "operator", "owner", "admin"];
+  if (!allowedRoles.includes(profile.role)) {
+    throw new HttpsError("permission-denied", "Role not allowed.");
+  }
+
+  const parkingSnap = await db.collection("parkings").doc(parkingId).get();
+  if (!parkingSnap.exists) {
+    throw new HttpsError("not-found", "Parking not found.");
+  }
+  const parking = parkingSnap.data();
+  const ownerId = String(parking.ownerId || "").trim();
+  if (!ownerId) {
+    return { parkingId, ownerId: null, phone: "", bankAccountNumber: "" };
+  }
+
+  const ownerSnap = await db.collection("owners").doc(ownerId).get();
+  const owner = ownerSnap.exists ? ownerSnap.data() : {};
+
+  return {
+    parkingId,
+    ownerId,
+    phone: String(owner.phone || "").trim(),
+    bankAccountNumber: String(owner.bankAccountNumber || "").trim(),
+  };
 });

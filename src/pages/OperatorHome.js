@@ -4,6 +4,7 @@ import { auth, firestore, functionsClient } from "../firebase";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import { Dialog } from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Select } from "../components/ui/select";
@@ -16,6 +17,9 @@ function OperatorHome() {
   const [allowWalkIn, setAllowWalkIn] = useState(true);
   const [activeSessions, setActiveSessions] = useState([]);
   const [pendingRequests, setPendingRequests] = useState([]);
+  const [pendingPayments, setPendingPayments] = useState([]);
+  const [paymentsRefreshNonce, setPaymentsRefreshNonce] = useState(0);
+  const [confirmPaymentTarget, setConfirmPaymentTarget] = useState(null);
   const [qrPayload, setQrPayload] = useState(null);
   const [qrLoading, setQrLoading] = useState(false);
   const [qrRefreshNonce, setQrRefreshNonce] = useState(0);
@@ -31,10 +35,40 @@ function OperatorHome() {
         setAssignedParkingIds(assigned);
         if (!selectedParkingId && assigned.length) setSelectedParkingId(assigned[0]);
       },
-      (err) => toast.error(err.message || "Failed to load operator profile.")
+      (err) => handleRealtimeError(err, "Failed to load operator profile.")
     );
     return () => unsub();
   }, [selectedParkingId]);
+
+  useEffect(() => {
+    if (!selectedParkingId) {
+      setPendingPayments([]);
+      return undefined;
+    }
+    let mounted = true;
+    let timer = null;
+
+    const loadPendingPayments = async () => {
+      try {
+        const callable = functionsClient.httpsCallable("listPendingPaymentsForOperator");
+        const response = await callable({ parkingId: selectedParkingId });
+        if (!mounted) return;
+        setPendingPayments(Array.isArray(response?.data?.pendingPayments) ? response.data.pendingPayments : []);
+      } catch (err) {
+        if (mounted) {
+          toast.error(err.message || "Failed to load pending payments.");
+        }
+      }
+    };
+
+    loadPendingPayments();
+    timer = setInterval(loadPendingPayments, 8000);
+
+    return () => {
+      mounted = false;
+      if (timer) clearInterval(timer);
+    };
+  }, [selectedParkingId, paymentsRefreshNonce]);
 
   useEffect(() => {
     if (!selectedParkingId) {
@@ -51,7 +85,7 @@ function OperatorHome() {
           list.sort((a, b) => getMs(b.createdAt) - getMs(a.createdAt));
           setPendingRequests(list);
         },
-        (err) => toast.error(err.message || "Failed to load pending requests.")
+        (err) => handleRealtimeError(err, "Failed to load pending requests.")
       );
     return () => unsub();
   }, [selectedParkingId]);
@@ -73,7 +107,7 @@ function OperatorHome() {
             return [...filtered, { id: docSnap.id, ...docSnap.data() }].sort((a, b) => a.name.localeCompare(b.name));
           });
         },
-        (err) => toast.error(err.message || "Failed to load assigned parking.")
+        (err) => handleRealtimeError(err, "Failed to load assigned parking.")
       )
     );
     return () => {
@@ -96,7 +130,7 @@ function OperatorHome() {
         (snapshot) => {
           setActiveSessions(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
         },
-        (err) => toast.error(err.message || "Failed to load active sessions.")
+        (err) => handleRealtimeError(err, "Failed to load active sessions.")
       );
     return () => unsub();
   }, [selectedParkingId]);
@@ -157,14 +191,6 @@ function OperatorHome() {
     await callAction("checkInVehicle", { parkingId: selectedParkingId, plateNumber, allowWalkIn });
   };
 
-  const onCheckOut = async (e) => {
-    e.preventDefault();
-    const result = await callAction("checkOutVehicle", { parkingId: selectedParkingId, plateNumber });
-    if (result?.feeAmount != null) {
-      toast.success(`Checkout success. Fee: ${result.feeAmount} ETB`);
-    }
-  };
-
   const onApproveRequest = async (requestId) => {
     const result = await callAction("approveCheckInRequest", { requestId });
     if (result?.sessionId) {
@@ -174,6 +200,43 @@ function OperatorHome() {
 
   const onRejectRequest = async (requestId) => {
     await callAction("rejectCheckInRequest", { requestId });
+  };
+
+  const onConfirmPayment = async (requestId) => {
+    const result = await callAction("confirmManualPayment", { requestId });
+    if (result?.feeAmount != null) {
+      toast.success(`Payment confirmed. Fee settled: ${result.feeAmount} ETB`);
+    }
+    setConfirmPaymentTarget(null);
+    setPaymentsRefreshNonce((n) => n + 1);
+  };
+
+  const onRejectPayment = async (requestId) => {
+    await callAction("rejectManualPayment", { requestId, reason: "Payment proof could not be verified" });
+    setPaymentsRefreshNonce((n) => n + 1);
+  };
+
+  const resolvePendingPaymentForSession = async (sessionId) => {
+    setLoadingAction("getPendingPaymentForSession");
+    try {
+      const callable = functionsClient.httpsCallable("getPendingPaymentForSession");
+      const response = await callable({ sessionId });
+      const pendingPayment = response?.data?.pendingPayment || null;
+      if (!pendingPayment) {
+        toast.error("No pending payment found for this session.");
+        return null;
+      }
+      setPendingPayments((prev) => {
+        const others = prev.filter((item) => item.id !== pendingPayment.id);
+        return [pendingPayment, ...others];
+      });
+      return pendingPayment;
+    } catch (err) {
+      toast.error(err.message || "Failed to resolve pending payment.");
+      return null;
+    } finally {
+      setLoadingAction("");
+    }
   };
 
   const qrLink = qrPayload?.deepLink || "";
@@ -264,9 +327,6 @@ function OperatorHome() {
                 <Button onClick={onCheckIn} disabled={loadingAction === "checkInVehicle"}>
                   {loadingAction === "checkInVehicle" ? "Checking in..." : "Check In"}
                 </Button>
-                <Button variant="secondary" onClick={onCheckOut} disabled={loadingAction === "checkOutVehicle"}>
-                  {loadingAction === "checkOutVehicle" ? "Checking out..." : "Check Out"}
-                </Button>
               </div>
             </form>
           </CardContent>
@@ -304,8 +364,56 @@ function OperatorHome() {
                 <div className="space-y-2">
                   {activeSessions.map((session) => (
                     <div className="rounded-lg border border-border p-3" key={session.id}>
-                      <div className="font-medium">{session.plateNumber}</div>
+                      {(() => {
+                        const sessionPendingPayment = pendingPayments.find((item) => item.sessionId === session.id);
+                        return (
+                          <>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="font-medium">{session.plateNumber}</div>
+                        <Badge variant={session.paymentStatus === "pending" ? "warning" : "secondary"}>
+                          {session.paymentStatus === "pending" ? "Awaiting Confirmation" : `Payment ${session.paymentStatus || "unpaid"}`}
+                        </Badge>
+                      </div>
                       <div className="text-xs text-muted-foreground">Session ID: {session.id}</div>
+                      {session.paymentStatus === "pending" ? (
+                        <div className="mt-1 text-xs text-amber-700">Driver has submitted payment. Confirm below in Pending Payments.</div>
+                      ) : null}
+                      {session.paymentStatus === "pending" && sessionPendingPayment ? (
+                        <div className="mt-2 flex gap-2">
+                          <Button size="sm" onClick={() => setConfirmPaymentTarget(sessionPendingPayment)}>
+                            Confirm Payment
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => onRejectPayment(sessionPendingPayment.id)}
+                            disabled={loadingAction === "rejectManualPayment"}
+                          >
+                            Reject
+                          </Button>
+                        </div>
+                      ) : null}
+                      {session.paymentStatus === "pending" && !sessionPendingPayment ? (
+                        <div className="mt-2 flex items-center gap-2">
+                          <span className="text-xs text-muted-foreground">Payment request not loaded yet.</span>
+                          <Button size="sm" variant="outline" onClick={() => setPaymentsRefreshNonce((n) => n + 1)}>
+                            Refresh Payments
+                          </Button>
+                          <Button
+                            size="sm"
+                            onClick={async () => {
+                              const pendingPayment = await resolvePendingPaymentForSession(session.id);
+                              if (pendingPayment) setConfirmPaymentTarget(pendingPayment);
+                            }}
+                            disabled={loadingAction === "getPendingPaymentForSession"}
+                          >
+                            {loadingAction === "getPendingPaymentForSession" ? "Loading..." : "Load & Confirm"}
+                          </Button>
+                        </div>
+                      ) : null}
+                          </>
+                        );
+                      })()}
                     </div>
                   ))}
                 </div>
@@ -341,8 +449,73 @@ function OperatorHome() {
               )}
             </CardContent>
           </Card>
+
+          <Card className="animate-fade-in-up">
+            <CardHeader className="flex flex-row items-center justify-between">
+              <CardTitle>Pending Payments</CardTitle>
+              <Button size="sm" variant="outline" onClick={() => setPaymentsRefreshNonce((n) => n + 1)}>
+                Refresh
+              </Button>
+            </CardHeader>
+            <CardContent>
+              {!pendingPayments.length ? (
+                <div className="text-sm text-muted-foreground">No pending payments.</div>
+              ) : (
+                <div className="space-y-2">
+                  {pendingPayments.map((request) => (
+                    <div className="rounded-lg border border-border p-3" key={request.id}>
+                      <div className="font-medium">{request.plateNumber || "Unknown Plate"}</div>
+                      <div className="text-xs text-muted-foreground">Driver: {request.driverId}</div>
+                      <div className="text-xs text-muted-foreground">Amount: {request.amountDue ?? 0} ETB</div>
+                      <div className="text-xs text-muted-foreground">Method: {request.method || "N/A"}</div>
+                      <div className="text-xs text-muted-foreground">Reference: {request.referenceCode || "Not provided"}</div>
+                      <div className="mb-2 text-xs text-muted-foreground">
+                        Submitted: {new Date(getMs(request.submittedAtMs || request.submittedAt)).toLocaleString()}
+                      </div>
+                      <div className="flex gap-2">
+                        <Button size="sm" onClick={() => setConfirmPaymentTarget(request)}>
+                          Confirm
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={() => onRejectPayment(request.id)} disabled={loadingAction === "rejectManualPayment"}>
+                          Reject
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </div>
       </div>
+
+      <Dialog
+        open={Boolean(confirmPaymentTarget)}
+        onClose={() => setConfirmPaymentTarget(null)}
+        title="Confirm Manual Payment"
+      >
+        {!confirmPaymentTarget ? null : (
+          <div className="space-y-4">
+            <div className="rounded-md border border-border bg-muted/30 p-3 text-sm">
+              <div className="font-medium">{confirmPaymentTarget.plateNumber || "Unknown plate"}</div>
+              <div className="text-xs text-muted-foreground">Amount: {confirmPaymentTarget.amountDue ?? 0} ETB</div>
+              <div className="text-xs text-muted-foreground">Method: {confirmPaymentTarget.method || "N/A"}</div>
+              <div className="text-xs text-muted-foreground">Reference: {confirmPaymentTarget.referenceCode || "Not provided"}</div>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setConfirmPaymentTarget(null)}>
+                Cancel
+              </Button>
+              <Button
+                onClick={() => onConfirmPayment(confirmPaymentTarget.id)}
+                disabled={loadingAction === "confirmManualPayment"}
+              >
+                {loadingAction === "confirmManualPayment" ? "Confirming..." : "Confirm Payment"}
+              </Button>
+            </div>
+          </div>
+        )}
+      </Dialog>
     </div>
   );
 }
@@ -353,6 +526,14 @@ function getMs(value) {
   if (value.toMillis) return value.toMillis();
   if (value.seconds) return value.seconds * 1000;
   return 0;
+}
+
+function handleRealtimeError(err, fallbackMessage) {
+  const code = err?.code || "";
+  if (code === "permission-denied") {
+    return;
+  }
+  toast.error(err?.message || fallbackMessage);
 }
 
 export default OperatorHome;

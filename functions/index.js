@@ -40,6 +40,94 @@ function parseTimestampMs(value) {
   return null;
 }
 
+function roundMoney(value) {
+  return Math.round(toNumber(value, 0) * 100) / 100;
+}
+
+function normalizeSplit(grossAmount, ownerAmount, platformCommission) {
+  const gross = roundMoney(grossAmount);
+  const commission = roundMoney(gross * PLATFORM_COMMISSION_RATE);
+  const owner = roundMoney(gross - commission);
+
+  return {
+    grossAmount: gross,
+    ownerAmount: ownerAmount == null ? owner : roundMoney(ownerAmount),
+    platformCommission: platformCommission == null ? commission : roundMoney(platformCommission),
+    adminCommissionDerived: commission,
+  };
+}
+
+function parseAnalyticsRange(data) {
+  const preset = String(data?.rangePreset || "30d").trim().toLowerCase();
+  const now = new Date();
+  let from = null;
+  let to = now;
+
+  if (preset === "7d") {
+    from = new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000);
+  } else if (preset === "30d") {
+    from = new Date(now.getTime() - 29 * 24 * 60 * 60 * 1000);
+  } else if (preset === "custom") {
+    const fromMs = toNumber(data?.fromMs, 0);
+    const toMs = toNumber(data?.toMs, 0);
+    if (!fromMs || !toMs) {
+      throw new HttpsError("invalid-argument", "Custom range requires fromMs and toMs.");
+    }
+    from = new Date(fromMs);
+    to = new Date(toMs);
+  } else {
+    throw new HttpsError("invalid-argument", "rangePreset must be 7d, 30d, or custom.");
+  }
+
+  from.setHours(0, 0, 0, 0);
+  to.setHours(23, 59, 59, 999);
+
+  if (from.getTime() > to.getTime()) {
+    const tmp = from;
+    from = to;
+    to = tmp;
+  }
+
+  return {
+    preset,
+    fromMs: from.getTime(),
+    toMs: to.getTime(),
+  };
+}
+
+function dayKey(ms) {
+  const d = new Date(ms);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function dayLabel(ms) {
+  const d = new Date(ms);
+  return `${d.toLocaleString("en-US", { month: "short" })} ${d.getDate()}`;
+}
+
+function buildSeriesSkeleton(fromMs, toMs) {
+  const map = {};
+  const cursor = new Date(fromMs);
+  cursor.setHours(0, 0, 0, 0);
+  while (cursor.getTime() <= toMs) {
+    const ms = cursor.getTime();
+    const key = dayKey(ms);
+    map[key] = {
+      key,
+      label: dayLabel(ms),
+      grossAmount: 0,
+      ownerAmount: 0,
+      adminCommission: 0,
+      paymentsCount: 0,
+    };
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return map;
+}
+
 function ensureParkingInvariant(parking) {
   const available = toNumber(parking.availableSlots, 0);
   const reserved = toNumber(parking.reservedSlots, 0);
@@ -102,97 +190,6 @@ async function writeAuditLog(action, actorUid, parkingId, metadata = {}) {
 
 function createRandomToken() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
-async function completeCheckout({ actorUid, actorRole, parkingId, plateNumber, paymentMethod }) {
-  const sessionQuery = await db
-    .collection("sessions")
-    .where("parkingId", "==", parkingId)
-    .where("plateNumber", "==", plateNumber)
-    .where("status", "==", "active")
-    .limit(1)
-    .get();
-  if (sessionQuery.empty) throw new HttpsError("not-found", "No active session for this plate.");
-
-  const sessionRef = sessionQuery.docs[0].ref;
-  const parkingRef = db.collection("parkings").doc(parkingId);
-  const paymentRef = db.collection("payments").doc();
-  const now = nowMs();
-  let result = null;
-
-  await db.runTransaction(async (tx) => {
-    const sessionSnap = await tx.get(sessionRef);
-    if (!sessionSnap.exists) throw new HttpsError("not-found", "Session not found.");
-    const session = sessionSnap.data();
-    if (session.status !== "active") throw new HttpsError("failed-precondition", "Session already completed.");
-    if (actorRole === "driver" && session.driverId !== actorUid) {
-      throw new HttpsError("permission-denied", "Drivers can only checkout their own sessions.");
-    }
-
-    const parkingSnap = await tx.get(parkingRef);
-    if (!parkingSnap.exists) throw new HttpsError("not-found", "Parking not found.");
-
-    const entryMs = parseTimestampMs(session.entryTime);
-    const durationMinutes = Math.max(1, Math.ceil((now - entryMs) / 60000));
-    const billedHours = Math.max(1, Math.ceil(durationMinutes / 60));
-    const feeAmount = billedHours * FLAT_HOURLY_RATE;
-    const platformCommission = Math.round(feeAmount * PLATFORM_COMMISSION_RATE * 100) / 100;
-    const ownerAmount = Math.round((feeAmount - platformCommission) * 100) / 100;
-
-    tx.update(sessionRef, {
-      status: "completed",
-      exitTime: ts(now),
-      durationMinutes,
-      billedHours,
-      hourlyRate: FLAT_HOURLY_RATE,
-      feeAmount,
-      paymentStatus: "confirmed",
-      checkedOutBy: actorUid,
-      checkedOutByRole: actorRole,
-      updatedAt: ts(now),
-    });
-
-    tx.update(parkingRef, {
-      occupiedSlots: FieldValue.increment(-1),
-      availableSlots: FieldValue.increment(1),
-      updatedAt: ts(now),
-    });
-
-    if (session.bookingId) {
-      tx.set(
-        db.collection("bookings").doc(session.bookingId),
-        { status: "completed", checkOutAt: ts(now), updatedAt: ts(now) },
-        { merge: true }
-      );
-    }
-
-    tx.set(paymentRef, {
-      sessionId: sessionRef.id,
-      bookingId: session.bookingId || null,
-      parkingId,
-      ownerId: session.ownerId || null,
-      grossAmount: feeAmount,
-      platformCommission,
-      ownerAmount,
-      method: paymentMethod || (actorRole === "driver" ? "driver_self_checkout" : "manual"),
-      status: "confirmed",
-      paidAt: ts(now),
-      confirmedBy: actorUid,
-      createdAt: ts(now),
-      updatedAt: ts(now),
-    });
-
-    result = {
-      sessionId: sessionRef.id,
-      paymentId: paymentRef.id,
-      status: "completed",
-      durationMinutes,
-      billedHours,
-      feeAmount,
-    };
-  });
-
-  return result;
 }
 
 function normalizePaymentMethod(value) {
@@ -861,6 +858,310 @@ exports.rejectManualPayment = onCall(CALLABLE_OPTIONS, async (request) => {
     reason,
   });
   return responseData;
+});
+
+exports.getAdminAnalytics = onCall(CALLABLE_OPTIONS, async (request) => {
+  await requireRole(request, "admin");
+  const range = parseAnalyticsRange(request.data || {});
+
+  const [ownersSnap, parkingsSnap, operatorsSnap, paymentsSnap, sessionsSnap, pendingRequestsSnap] = await Promise.all([
+    db.collection("owners").get(),
+    db.collection("parkings").get(),
+    db.collection("users").where("role", "==", "operator").get(),
+    db.collection("payments").where("status", "==", "confirmed").get(),
+    db.collection("sessions").where("status", "==", "completed").get(),
+    db.collection("paymentRequests").where("status", "==", "pending").get(),
+  ]);
+
+  const owners = ownersSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  const parkings = parkingsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  const operators = operatorsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  const sessions = sessionsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  const allPayments = paymentsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+
+  const ownerNameById = {};
+  owners.forEach((owner) => {
+    ownerNameById[owner.ownerId || owner.id] = owner.fullName || owner.email || owner.ownerId || owner.id;
+  });
+  const parkingNameById = {};
+  parkings.forEach((parking) => {
+    parkingNameById[parking.id] = parking.name || parking.id;
+  });
+
+  const filteredPayments = allPayments.filter((payment) => {
+    const paidAtMs = parseTimestampMs(payment.paidAt || payment.createdAt || payment.updatedAt);
+    return paidAtMs && paidAtMs >= range.fromMs && paidAtMs <= range.toMs;
+  });
+
+  let totalGrossRevenue = 0;
+  let totalOwnerRevenue = 0;
+  let totalAdminCommission = 0;
+  const methodMap = {};
+  const ownersAgg = {};
+  const parkingsAgg = {};
+  const seriesMap = buildSeriesSkeleton(range.fromMs, range.toMs);
+
+  const paymentsTable = filteredPayments
+    .map((payment) => {
+      const split = normalizeSplit(payment.grossAmount, payment.ownerAmount, payment.platformCommission);
+      const paidAtMs = parseTimestampMs(payment.paidAt || payment.createdAt || payment.updatedAt);
+      const method = String(payment.method || "unknown").toLowerCase();
+
+      totalGrossRevenue += split.grossAmount;
+      totalOwnerRevenue += split.ownerAmount;
+      totalAdminCommission += split.adminCommissionDerived;
+
+      if (!methodMap[method]) methodMap[method] = { method, amount: 0, count: 0 };
+      methodMap[method].amount += split.grossAmount;
+      methodMap[method].count += 1;
+
+      const ownerId = String(payment.ownerId || "unknown");
+      if (!ownersAgg[ownerId]) {
+        ownersAgg[ownerId] = {
+          ownerId,
+          ownerName: ownerNameById[ownerId] || ownerId,
+          grossAmount: 0,
+          ownerAmount: 0,
+          adminCommission: 0,
+          paymentsCount: 0,
+        };
+      }
+      ownersAgg[ownerId].grossAmount += split.grossAmount;
+      ownersAgg[ownerId].ownerAmount += split.ownerAmount;
+      ownersAgg[ownerId].adminCommission += split.adminCommissionDerived;
+      ownersAgg[ownerId].paymentsCount += 1;
+
+      const parkingId = String(payment.parkingId || "unknown");
+      if (!parkingsAgg[parkingId]) {
+        parkingsAgg[parkingId] = {
+          parkingId,
+          parkingName: parkingNameById[parkingId] || parkingId,
+          grossAmount: 0,
+          ownerAmount: 0,
+          adminCommission: 0,
+          paymentsCount: 0,
+        };
+      }
+      parkingsAgg[parkingId].grossAmount += split.grossAmount;
+      parkingsAgg[parkingId].ownerAmount += split.ownerAmount;
+      parkingsAgg[parkingId].adminCommission += split.adminCommissionDerived;
+      parkingsAgg[parkingId].paymentsCount += 1;
+
+      if (paidAtMs) {
+        const key = dayKey(paidAtMs);
+        if (seriesMap[key]) {
+          seriesMap[key].grossAmount += split.grossAmount;
+          seriesMap[key].ownerAmount += split.ownerAmount;
+          seriesMap[key].adminCommission += split.adminCommissionDerived;
+          seriesMap[key].paymentsCount += 1;
+        }
+      }
+
+      return {
+        paymentId: payment.id,
+        parkingId: payment.parkingId || "",
+        parkingName: parkingNameById[payment.parkingId] || payment.parkingId || "unknown",
+        ownerId: payment.ownerId || "",
+        ownerName: ownerNameById[payment.ownerId] || payment.ownerId || "unknown",
+        grossAmount: split.grossAmount,
+        ownerAmount: split.ownerAmount,
+        adminCommission: split.adminCommissionDerived,
+        method,
+        paidAtMs: paidAtMs || 0,
+      };
+    })
+    .sort((a, b) => b.paidAtMs - a.paidAtMs)
+    .slice(0, 150);
+
+  return {
+    range,
+    summary: {
+      owners: owners.length,
+      operators: operators.length,
+      parkings: parkings.length,
+      activeParkings: parkings.filter((parking) => parking.status === "active").length,
+      totalConfirmedPayments: filteredPayments.length,
+      totalCompletedSessions: sessions.length,
+      pendingPaymentRequests: pendingRequestsSnap.size,
+      totalGrossRevenue: roundMoney(totalGrossRevenue),
+      totalOwnerRevenue: roundMoney(totalOwnerRevenue),
+      totalAdminCommission: roundMoney(totalAdminCommission),
+    },
+    revenueSeries: Object.values(seriesMap).sort((a, b) => a.key.localeCompare(b.key)),
+    paymentMethodBreakdown: Object.values(methodMap).sort((a, b) => b.amount - a.amount),
+    topOwners: Object.values(ownersAgg).sort((a, b) => b.grossAmount - a.grossAmount).slice(0, 10),
+    topParkings: Object.values(parkingsAgg).sort((a, b) => b.grossAmount - a.grossAmount).slice(0, 10),
+    paymentsTable,
+  };
+});
+
+exports.getOwnerAnalytics = onCall(CALLABLE_OPTIONS, async (request) => {
+  const ownerProfile = await requireRole(request, "owner");
+  const ownerId = String(ownerProfile.ownerId || "").trim();
+  if (!ownerId) throw new HttpsError("failed-precondition", "Owner profile is missing ownerId.");
+  const range = parseAnalyticsRange(request.data || {});
+
+  const [ownerSnap, parkingsSnap, operatorsSnap, sessionsSnap, paymentsSnap, pendingRequestsSnap] = await Promise.all([
+    db.collection("owners").doc(ownerId).get(),
+    db.collection("parkings").where("ownerId", "==", ownerId).get(),
+    db.collection("users").where("ownerId", "==", ownerId).where("role", "==", "operator").get(),
+    db.collection("sessions").where("ownerId", "==", ownerId).get(),
+    db.collection("payments").where("ownerId", "==", ownerId).where("status", "==", "confirmed").get(),
+    db.collection("paymentRequests").where("ownerId", "==", ownerId).where("status", "==", "pending").get(),
+  ]);
+
+  const ownerAccount = ownerSnap.exists ? ownerSnap.data() : {};
+  const parkings = parkingsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  const operators = operatorsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  const sessions = sessionsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  const allPayments = paymentsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+
+  const parkingNameById = {};
+  parkings.forEach((parking) => {
+    parkingNameById[parking.id] = parking.name || parking.id;
+  });
+
+  const filteredPayments = allPayments.filter((payment) => {
+    const paidAtMs = parseTimestampMs(payment.paidAt || payment.createdAt || payment.updatedAt);
+    return paidAtMs && paidAtMs >= range.fromMs && paidAtMs <= range.toMs;
+  });
+
+  const filteredCompletedSessions = sessions.filter((session) => {
+    if (session.status !== "completed") return false;
+    const exitMs = parseTimestampMs(session.exitTime || session.updatedAt || session.createdAt);
+    return exitMs && exitMs >= range.fromMs && exitMs <= range.toMs;
+  });
+
+  let totalGrossRevenue = 0;
+  let totalOwnerRevenue = 0;
+  let totalAdminCommission = 0;
+  const methodMap = {};
+  const parkingAgg = {};
+  const seriesMap = buildSeriesSkeleton(range.fromMs, range.toMs);
+
+  const paymentsTable = filteredPayments
+    .map((payment) => {
+      const split = normalizeSplit(payment.grossAmount, payment.ownerAmount, payment.platformCommission);
+      const paidAtMs = parseTimestampMs(payment.paidAt || payment.createdAt || payment.updatedAt);
+      const method = String(payment.method || "unknown").toLowerCase();
+
+      totalGrossRevenue += split.grossAmount;
+      totalOwnerRevenue += split.ownerAmount;
+      totalAdminCommission += split.adminCommissionDerived;
+
+      if (!methodMap[method]) methodMap[method] = { method, amount: 0, count: 0 };
+      methodMap[method].amount += split.grossAmount;
+      methodMap[method].count += 1;
+
+      const parkingId = String(payment.parkingId || "unknown");
+      if (!parkingAgg[parkingId]) {
+        parkingAgg[parkingId] = {
+          parkingId,
+          parkingName: parkingNameById[parkingId] || parkingId,
+          grossAmount: 0,
+          ownerAmount: 0,
+          adminCommission: 0,
+          paymentsCount: 0,
+          sessionsCount: 0,
+        };
+      }
+      parkingAgg[parkingId].grossAmount += split.grossAmount;
+      parkingAgg[parkingId].ownerAmount += split.ownerAmount;
+      parkingAgg[parkingId].adminCommission += split.adminCommissionDerived;
+      parkingAgg[parkingId].paymentsCount += 1;
+
+      if (paidAtMs) {
+        const key = dayKey(paidAtMs);
+        if (seriesMap[key]) {
+          seriesMap[key].grossAmount += split.grossAmount;
+          seriesMap[key].ownerAmount += split.ownerAmount;
+          seriesMap[key].adminCommission += split.adminCommissionDerived;
+          seriesMap[key].paymentsCount += 1;
+        }
+      }
+
+      return {
+        paymentId: payment.id,
+        parkingId: payment.parkingId || "",
+        parkingName: parkingNameById[payment.parkingId] || payment.parkingId || "unknown",
+        grossAmount: split.grossAmount,
+        ownerAmount: split.ownerAmount,
+        adminCommission: split.adminCommissionDerived,
+        method,
+        paidAtMs: paidAtMs || 0,
+      };
+    })
+    .sort((a, b) => b.paidAtMs - a.paidAtMs)
+    .slice(0, 150);
+
+  filteredCompletedSessions.forEach((session) => {
+    const parkingId = String(session.parkingId || "unknown");
+    if (!parkingAgg[parkingId]) {
+      parkingAgg[parkingId] = {
+        parkingId,
+        parkingName: parkingNameById[parkingId] || parkingId,
+        grossAmount: 0,
+        ownerAmount: 0,
+        adminCommission: 0,
+        paymentsCount: 0,
+        sessionsCount: 0,
+      };
+    }
+    parkingAgg[parkingId].sessionsCount += 1;
+  });
+
+  const totalCapacity = parkings.reduce((acc, parking) => acc + toNumber(parking.slotCapacity, 0), 0);
+  const totalAvailable = parkings.reduce((acc, parking) => acc + toNumber(parking.availableSlots, 0), 0);
+  const totalReserved = parkings.reduce((acc, parking) => acc + toNumber(parking.reservedSlots, 0), 0);
+  const totalOccupied = parkings.reduce((acc, parking) => acc + toNumber(parking.occupiedSlots, 0), 0);
+
+  return {
+    ownerId,
+    ownerAccount: {
+      ownerId,
+      fullName: ownerAccount.fullName || ownerProfile.fullName || "",
+      email: ownerAccount.email || ownerProfile.email || "",
+      phone: ownerAccount.phone || ownerProfile.phone || "",
+      bankAccountNumber: ownerAccount.bankAccountNumber || "",
+    },
+    range,
+    summary: {
+      ownedParkings: parkings.length,
+      activeOperators: operators.filter((operator) => operator.status === "active").length,
+      inactiveOperators: operators.filter((operator) => operator.status !== "active").length,
+      totalCapacity,
+      totalAvailable,
+      totalReserved,
+      totalOccupied,
+      pendingPaymentRequests: pendingRequestsSnap.size,
+      totalCompletedSessions: filteredCompletedSessions.length,
+      totalGrossRevenue: roundMoney(totalGrossRevenue),
+      totalOwnerRevenue: roundMoney(totalOwnerRevenue),
+      totalAdminCommission: roundMoney(totalAdminCommission),
+    },
+    revenueSeries: Object.values(seriesMap).sort((a, b) => a.key.localeCompare(b.key)),
+    paymentMethodBreakdown: Object.values(methodMap).sort((a, b) => b.amount - a.amount),
+    parkingsTable: Object.values(parkingAgg).sort((a, b) => b.grossAmount - a.grossAmount).slice(0, 30),
+    paymentsTable,
+    operators: operators.map((operator) => ({
+      id: operator.id,
+      fullName: operator.fullName || "",
+      email: operator.email || "",
+      status: operator.status || "inactive",
+      assignedParkingIds: Array.isArray(operator.assignedParkingIds) ? operator.assignedParkingIds : [],
+    })),
+    parkings: parkings.map((parking) => ({
+      id: parking.id,
+      name: parking.name || parking.id,
+      address: parking.address || "",
+      status: parking.status || "inactive",
+      slotCapacity: toNumber(parking.slotCapacity, 0),
+      availableSlots: toNumber(parking.availableSlots, 0),
+      reservedSlots: toNumber(parking.reservedSlots, 0),
+      occupiedSlots: toNumber(parking.occupiedSlots, 0),
+      hourlyRate: toNumber(parking.hourlyRate, FLAT_HOURLY_RATE),
+    })),
+  };
 });
 
 exports.createOwnerAccount = onCall(CALLABLE_OPTIONS, async (request) => {

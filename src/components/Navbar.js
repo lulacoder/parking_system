@@ -4,6 +4,8 @@ import { auth } from "../firebase";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 
+const brandLogoUrl = `${process.env.PUBLIC_URL}/logo.svg`;
+
 function Navbar({ userRole, userEmail }) {
   const handleLogout = () => {
     if (window.confirm("Are you sure you want to logout?")) {
@@ -23,9 +25,11 @@ function Navbar({ userRole, userEmail }) {
     <header className="sticky top-0 z-40 border-b border-border/60 bg-white/90 backdrop-blur">
       <div className="mx-auto flex w-full max-w-[1400px] items-center justify-between px-4 py-3 md:px-6">
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 text-lg text-white shadow-soft">
-            <span>🚗</span>
-          </div>
+          <img
+            src={brandLogoUrl}
+            alt="Enderase"
+            className="h-12 w-12 rounded-xl bg-white object-cover shadow-soft"
+          />
           <div>
             <p className="font-heading text-xl font-bold tracking-wide text-slate-900">ENDERASE</p>
             <p className="text-xs font-medium uppercase tracking-[0.2em] text-slate-500">Smart Parking</p>

@@ -14,6 +14,8 @@ import DriverCheckInConfirm from "./pages/DriverCheckInConfirm";
 import { RedirectHome, RequireAuth, RequireRole } from "./app/RoleGuards";
 import { FALLBACK_ROLE, getRoleHome, sanitizeRole } from "./app/roleUtils";
 
+const brandLogoUrl = `${process.env.PUBLIC_URL}/logo.svg`;
+
 function App() {
   const [user, setUser] = useState(null);
   const [userRole, setUserRole] = useState(FALLBACK_ROLE);
@@ -102,6 +104,7 @@ function App() {
   if (loading) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center bg-slate-950 text-white">
+        <img src={brandLogoUrl} alt="Enderase" className="h-24 w-24 rounded-2xl bg-white object-cover p-2 shadow-soft" />
         <div className="h-12 w-12 animate-spin rounded-full border-4 border-blue-300 border-t-blue-600" role="status"></div>
         <h3 className="mt-5 font-heading text-2xl font-bold uppercase tracking-[0.25em]">E N D E R A S E</h3>
         <p className="mt-2 text-sm text-slate-400">Loading authentication...</p>

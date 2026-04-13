@@ -73,8 +73,8 @@ function AdminHome() {
     reservedSlots: 0,
     occupiedSlots: 0,
     hourlyRate: 50,
-    lat: 8.997,
-    lng: 38.786,
+    lat: "",
+    lng: "",
   });
 
   const [assignmentForm, setAssignmentForm] = useState({
@@ -103,8 +103,28 @@ function AdminHome() {
 
   const submitParking = async (event) => {
     event.preventDefault();
+    const lat = Number(parkingForm.lat);
+    const lng = Number(parkingForm.lng);
+
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      toast.error("Latitude and longitude are required.");
+      return;
+    }
+    if (lat < -90 || lat > 90) {
+      toast.error("Latitude must be between -90 and 90.");
+      return;
+    }
+    if (lng < -180 || lng > 180) {
+      toast.error("Longitude must be between -180 and 180.");
+      return;
+    }
+
     try {
-      const data = await upsertParkingMutation.mutateAsync(parkingForm);
+      const data = await upsertParkingMutation.mutateAsync({
+        ...parkingForm,
+        lat,
+        lng,
+      });
       toast.success(`Parking saved: ${data.parkingId}`);
       setParkingForm((prev) => ({ ...prev, parkingId: data.parkingId }));
     } catch (error) {
@@ -289,7 +309,29 @@ function AdminHome() {
                 </Select>
               </Field>
               <Field label="Parking Name"><Input value={parkingForm.name} onChange={(e) => setParkingForm({ ...parkingForm, name: e.target.value })} required /></Field>
-              <Field label="Address"><Input value={parkingForm.address} onChange={(e) => setParkingForm({ ...parkingForm, address: e.target.value })} required /></Field>
+              <Field label="Address"><Input placeholder="Human-readable address (e.g. Bole, Addis Ababa)" value={parkingForm.address} onChange={(e) => setParkingForm({ ...parkingForm, address: e.target.value })} required /></Field>
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="Latitude">
+                  <Input
+                    type="number"
+                    step="any"
+                    placeholder="e.g. 9.025"
+                    value={parkingForm.lat}
+                    onChange={(e) => setParkingForm({ ...parkingForm, lat: e.target.value })}
+                    required
+                  />
+                </Field>
+                <Field label="Longitude">
+                  <Input
+                    type="number"
+                    step="any"
+                    placeholder="e.g. 38.7469"
+                    value={parkingForm.lng}
+                    onChange={(e) => setParkingForm({ ...parkingForm, lng: e.target.value })}
+                    required
+                  />
+                </Field>
+              </div>
               <div className="grid grid-cols-2 gap-2">
                 <Field label="Capacity"><Input type="number" value={parkingForm.slotCapacity} onChange={(e) => setParkingForm({ ...parkingForm, slotCapacity: Number(e.target.value || 0) })} /></Field>
                 <Field label="Available"><Input type="number" value={parkingForm.availableSlots} onChange={(e) => setParkingForm({ ...parkingForm, availableSlots: Number(e.target.value || 0) })} /></Field>

@@ -4,7 +4,16 @@ const { HttpsError, onCall } = require("firebase-functions/v2/https");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { logger } = require("firebase-functions/v2");
 
-admin.initializeApp();
+// Initialize Firebase Admin
+// In emulator: uses service account key if available, otherwise uses default credentials
+// In production: uses default credentials automatically
+try {
+  admin.initializeApp();
+} catch (error) {
+  logger.error("Failed to initialize Firebase Admin", error);
+  throw error;
+}
+
 const db = admin.firestore();
 
 const REGION = "us-central1";

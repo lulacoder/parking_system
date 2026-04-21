@@ -13,9 +13,10 @@ export function RequireAuth({ user, loading }) {
 }
 
 export function RequireRole({ user, role, allowedRoles }) {
+  const normalizedRole = sanitizeRole(role);
   if (!user) return <Navigate to="/login" replace />;
-  if (!allowedRoles.includes(role)) {
-    return <Navigate to={getRoleHome(role)} replace />;
+  if (!allowedRoles.includes(normalizedRole)) {
+    return <Navigate to={getRoleHome(normalizedRole)} replace />;
   }
   return <Outlet />;
 }

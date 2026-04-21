@@ -30,7 +30,7 @@ export function useAdminAnalytics(rangePreset = "30d", options = {}) {
 
 export function useAdminOwners(options = {}) {
   return useQuery({
-    queryKey: dashboardQueryKeys.adminOwners,
+    queryKey: dashboardQueryKeys.adminOwners(),
     queryFn: getAdminOwnerList,
     refetchInterval: options.refetchInterval ?? 15000,
     ...options,
@@ -39,7 +39,7 @@ export function useAdminOwners(options = {}) {
 
 export function useAdminParkings(options = {}) {
   return useQuery({
-    queryKey: dashboardQueryKeys.adminParkings,
+    queryKey: dashboardQueryKeys.adminParkings(),
     queryFn: getAdminParkingList,
     refetchInterval: options.refetchInterval ?? 15000,
     ...options,
@@ -48,7 +48,7 @@ export function useAdminParkings(options = {}) {
 
 export function useAdminOperators(options = {}) {
   return useQuery({
-    queryKey: dashboardQueryKeys.adminOperators,
+    queryKey: dashboardQueryKeys.adminOperators(),
     queryFn: getAdminOperatorList,
     refetchInterval: options.refetchInterval ?? 15000,
     ...options,
@@ -71,7 +71,7 @@ export function useCreateOwnerAccount() {
     mutationFn: createOwnerAccount,
     onSuccess: async () => {
       await invalidateMany(queryClient, [
-        dashboardQueryKeys.adminOwners,
+        dashboardQueryKeys.adminOwners(),
         dashboardQueryKeys.adminAnalytics("7d"),
         dashboardQueryKeys.adminAnalytics("30d"),
       ]);
@@ -86,7 +86,7 @@ export function useUpsertParking() {
     mutationFn: upsertParking,
     onSuccess: async () => {
       await invalidateMany(queryClient, [
-        dashboardQueryKeys.adminParkings,
+        dashboardQueryKeys.adminParkings(),
         dashboardQueryKeys.adminAnalytics("7d"),
         dashboardQueryKeys.adminAnalytics("30d"),
         dashboardQueryKeys.ownerAnalytics("7d"),
@@ -103,7 +103,7 @@ export function useAssignOperatorToParking() {
     mutationFn: assignOperatorToParking,
     onSuccess: async () => {
       await invalidateMany(queryClient, [
-        dashboardQueryKeys.adminOperators,
+        dashboardQueryKeys.adminOperators(),
         dashboardQueryKeys.adminAnalytics("7d"),
         dashboardQueryKeys.adminAnalytics("30d"),
         dashboardQueryKeys.ownerAnalytics("7d"),
@@ -136,7 +136,7 @@ export function useCreateOwnerOperator() {
       await invalidateMany(queryClient, [
         dashboardQueryKeys.ownerAnalytics("7d"),
         dashboardQueryKeys.ownerAnalytics("30d"),
-        dashboardQueryKeys.adminOperators,
+        dashboardQueryKeys.adminOperators(),
       ]);
     },
   });
@@ -151,7 +151,7 @@ export function useUpdateOwnerOperatorAssignments() {
       await invalidateMany(queryClient, [
         dashboardQueryKeys.ownerAnalytics("7d"),
         dashboardQueryKeys.ownerAnalytics("30d"),
-        dashboardQueryKeys.adminOperators,
+        dashboardQueryKeys.adminOperators(),
       ]);
     },
   });
@@ -166,7 +166,7 @@ export function useSetOwnerOperatorStatus() {
       await invalidateMany(queryClient, [
         dashboardQueryKeys.ownerAnalytics("7d"),
         dashboardQueryKeys.ownerAnalytics("30d"),
-        dashboardQueryKeys.adminOperators,
+        dashboardQueryKeys.adminOperators(),
       ]);
     },
   });

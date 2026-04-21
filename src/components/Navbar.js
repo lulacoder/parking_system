@@ -1,5 +1,6 @@
-import React from "react";
+import React, { useState } from "react";
 import { LogOut, Shield } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { auth } from "../firebase";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -7,9 +8,17 @@ import { Button } from "./ui/button";
 const brandLogoUrl = `${process.env.PUBLIC_URL}/logo.svg`;
 
 function Navbar({ userRole, userEmail }) {
-  const handleLogout = () => {
-    if (window.confirm("Are you sure you want to logout?")) {
-      auth.signOut();
+  const navigate = useNavigate();
+  const [isSigningOut, setIsSigningOut] = useState(false);
+
+  const handleLogout = async () => {
+    if (!window.confirm("Are you sure you want to logout?")) return;
+    try {
+      setIsSigningOut(true);
+      await auth.signOut();
+    } finally {
+      setIsSigningOut(false);
+      navigate("/login", { replace: true });
     }
   };
 
@@ -45,9 +54,9 @@ function Navbar({ userRole, userEmail }) {
             </div>
           </div>
 
-          <Button variant="destructive" size="sm" onClick={handleLogout}>
+          <Button variant="destructive" size="sm" onClick={handleLogout} disabled={isSigningOut}>
             <LogOut className="h-4 w-4" />
-            Logout
+            {isSigningOut ? "Logging out..." : "Logout"}
           </Button>
         </div>
       </div>

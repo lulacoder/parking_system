@@ -187,6 +187,34 @@ async function assertOwnerControlsParking(ownerId, parkingId) {
   }
 }
 
+async function assertDriverHasParkingAccess(driverUid, parkingId) {
+  const [activeSessionSnap, paymentRequestSnap] = await Promise.all([
+    db
+      .collection("sessions")
+      .where("driverId", "==", driverUid)
+      .where("status", "==", "active")
+      .limit(25)
+      .get(),
+    db
+      .collection("paymentRequests")
+      .where("driverId", "==", driverUid)
+      .limit(100)
+      .get(),
+  ]);
+
+  const hasActiveSession = activeSessionSnap.docs.some(
+    (doc) => String(doc.data()?.parkingId || "").trim() === parkingId
+  );
+  const hasPendingPayment = paymentRequestSnap.docs.some((doc) => {
+    const payload = doc.data();
+    return String(payload?.parkingId || "").trim() === parkingId && payload?.status === "pending";
+  });
+
+  if (!hasActiveSession && !hasPendingPayment) {
+    throw new HttpsError("permission-denied", "Driver does not have an active session/payment at this parking.");
+  }
+}
+
 async function writeAuditLog(action, actorUid, parkingId, metadata = {}) {
   await db.collection("auditLogs").add({
     action,
@@ -1021,9 +1049,17 @@ exports.getOwnerAnalytics = onCall(CALLABLE_OPTIONS, async (request) => {
 
   const ownerAccount = ownerSnap.exists ? ownerSnap.data() : {};
   const parkings = parkingsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  const ownedParkingIds = new Set(parkings.map((parking) => String(parking.id || "").trim()).filter(Boolean));
   const operators = operatorsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-  const sessions = sessionsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-  const allPayments = paymentsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  const sessions = sessionsSnap.docs
+    .map((doc) => ({ id: doc.id, ...doc.data() }))
+    .filter((session) => ownedParkingIds.has(String(session.parkingId || "").trim()));
+  const allPayments = paymentsSnap.docs
+    .map((doc) => ({ id: doc.id, ...doc.data() }))
+    .filter((payment) => ownedParkingIds.has(String(payment.parkingId || "").trim()));
+  const pendingRequests = pendingRequestsSnap.docs
+    .map((doc) => ({ id: doc.id, ...doc.data() }))
+    .filter((requestDoc) => ownedParkingIds.has(String(requestDoc.parkingId || "").trim()));
 
   const parkingNameById = {};
   parkings.forEach((parking) => {
@@ -1142,7 +1178,7 @@ exports.getOwnerAnalytics = onCall(CALLABLE_OPTIONS, async (request) => {
       totalAvailable,
       totalReserved,
       totalOccupied,
-      pendingPaymentRequests: pendingRequestsSnap.size,
+      pendingPaymentRequests: pendingRequests.length,
       totalCompletedSessions: filteredCompletedSessions.length,
       totalGrossRevenue: roundMoney(totalGrossRevenue),
       totalOwnerRevenue: roundMoney(totalOwnerRevenue),
@@ -1157,7 +1193,9 @@ exports.getOwnerAnalytics = onCall(CALLABLE_OPTIONS, async (request) => {
       fullName: operator.fullName || "",
       email: operator.email || "",
       status: operator.status || "inactive",
-      assignedParkingIds: Array.isArray(operator.assignedParkingIds) ? operator.assignedParkingIds : [],
+      assignedParkingIds: (Array.isArray(operator.assignedParkingIds) ? operator.assignedParkingIds : []).filter(
+        (parkingId) => ownedParkingIds.has(String(parkingId || "").trim())
+      ),
     })),
     parkings: parkings.map((parking) => ({
       id: parking.id,
@@ -1898,7 +1936,8 @@ exports.ownerUpdatePaymentDetails = onCall(CALLABLE_OPTIONS, async (request) => 
 });
 
 exports.getParkingPaymentDetails = onCall(CALLABLE_OPTIONS, async (request) => {
-  if (!request.auth?.uid) {
+  const actorUid = request.auth?.uid;
+  if (!actorUid) {
     throw new HttpsError("unauthenticated", "Authentication required.");
   }
 
@@ -1907,7 +1946,7 @@ exports.getParkingPaymentDetails = onCall(CALLABLE_OPTIONS, async (request) => {
     throw new HttpsError("invalid-argument", "parkingId is required.");
   }
 
-  const profile = await getUserProfile(request.auth.uid);
+  const profile = await getUserProfile(actorUid);
   if (!profile) {
     throw new HttpsError("failed-precondition", "User profile not found.");
   }
@@ -1918,6 +1957,18 @@ exports.getParkingPaymentDetails = onCall(CALLABLE_OPTIONS, async (request) => {
   const allowedRoles = ["driver", "operator", "owner", "admin"];
   if (!allowedRoles.includes(profile.role)) {
     throw new HttpsError("permission-denied", "Role not allowed.");
+  }
+
+  if (profile.role === "operator") {
+    await assertOperatorAssigned(actorUid, parkingId);
+  } else if (profile.role === "owner") {
+    const ownerId = String(profile.ownerId || "").trim();
+    if (!ownerId) {
+      throw new HttpsError("failed-precondition", "Owner profile is missing ownerId.");
+    }
+    await assertOwnerControlsParking(ownerId, parkingId);
+  } else if (profile.role === "driver") {
+    await assertDriverHasParkingAccess(actorUid, parkingId);
   }
 
   const parkingSnap = await db.collection("parkings").doc(parkingId).get();

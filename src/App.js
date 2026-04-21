@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { BrowserRouter as Router, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { Toaster } from "sonner";
 
@@ -12,7 +12,8 @@ import OwnerHome from "./pages/OwnerHome";
 import OperatorHome from "./pages/OperatorHome";
 import DriverCheckInConfirm from "./pages/DriverCheckInConfirm";
 import { RedirectHome, RequireAuth, RequireRole } from "./app/RoleGuards";
-import { FALLBACK_ROLE, getRoleHome, sanitizeRole } from "./app/roleUtils";
+import { FALLBACK_ROLE, canRoleAccessPath, getRoleHome, sanitizeRole } from "./app/roleUtils";
+import { queryClient } from "./lib/serverState/queryClient";
 
 const brandLogoUrl = `${process.env.PUBLIC_URL}/logo.svg`;
 
@@ -20,6 +21,7 @@ function App() {
   const [user, setUser] = useState(null);
   const [userRole, setUserRole] = useState(FALLBACK_ROLE);
   const [loading, setLoading] = useState(true);
+  const previousUidRef = useRef(null);
 
   useEffect(() => {
     let mounted = true;
@@ -30,6 +32,11 @@ function App() {
     const unsubscribe = auth.onAuthStateChanged(
       async (currentUser) => {
         if (!mounted) return;
+        const currentUid = currentUser?.uid || null;
+        if (previousUidRef.current !== currentUid) {
+          queryClient.clear();
+          previousUidRef.current = currentUid;
+        }
         setLoading(true);
 
         if (!currentUser) {
@@ -161,9 +168,8 @@ function LoginRoute({ user, role }) {
 
   const params = new URLSearchParams(location.search);
   const next = params.get("next") || "";
-  const isSafeInternalPath = next.startsWith("/") && !next.startsWith("//");
   const sanitizedRole = sanitizeRole(role);
-  if (isSafeInternalPath && (sanitizedRole === "driver" || !next.startsWith("/driver"))) {
+  if (canRoleAccessPath(sanitizedRole, next)) {
     return <Navigate to={next} replace />;
   }
   return <Navigate to={getRoleHome(sanitizedRole)} replace />;

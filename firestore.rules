@@ -74,7 +74,10 @@ service cloud.firestore {
     }
 
     match /parkings/{parkingId} {
-      allow read: if isSignedIn();
+      allow read: if isAdmin()
+        || (isOwner() && resource.data.ownerId == ownerIdOfUser())
+        || isAssignedOperator(parkingId)
+        || (isDriver() && resource.data.status == "active");
       allow write: if false;
     }
 

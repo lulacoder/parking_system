@@ -191,11 +191,11 @@ const operatorSchema = z.object({
 const rangePresetSchema = z.enum(["7d", "30d"]);
 
 export const dashboardQueryKeys = {
-  adminAnalytics: (preset) => ["dashboard", "admin", "analytics", preset || "30d"],
-  adminOwners: ["dashboard", "admin", "owners"],
-  adminParkings: ["dashboard", "admin", "parkings"],
-  adminOperators: ["dashboard", "admin", "operators"],
-  ownerAnalytics: (preset) => ["dashboard", "owner", "analytics", preset || "30d"],
+  adminAnalytics: (preset, uid) => ["dashboard", uid || auth.currentUser?.uid || "anon", "admin", "analytics", preset || "30d"],
+  adminOwners: (uid) => ["dashboard", uid || auth.currentUser?.uid || "anon", "admin", "owners"],
+  adminParkings: (uid) => ["dashboard", uid || auth.currentUser?.uid || "anon", "admin", "parkings"],
+  adminOperators: (uid) => ["dashboard", uid || auth.currentUser?.uid || "anon", "admin", "operators"],
+  ownerAnalytics: (preset, uid) => ["dashboard", uid || auth.currentUser?.uid || "anon", "owner", "analytics", preset || "30d"],
 };
 
 function parseRangePreset(input) {
